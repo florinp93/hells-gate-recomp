@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 
 namespace DantesInferno.Installer
@@ -17,6 +20,8 @@ namespace DantesInferno.Installer
         private string _isoPath;
         private string _installerDir;
         private string _payloadDir;
+        private string _lang = LauncherLocalizer.DefaultLanguage;
+        private bool _populatingLanguage;
         private readonly BackgroundWorker _worker = new BackgroundWorker();
 
         public MainWindow()
@@ -25,6 +30,9 @@ namespace DantesInferno.Installer
             InitializeTheme();
             _installerDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             _payloadDir = ExtractEmbeddedPayload();
+            DetectInstallerLanguage();
+            PopulateInstallerLanguageCombo();
+            ApplyLocalization();
             UpdateNavigation();
 
             _worker.WorkerReportsProgress = true;
@@ -32,6 +40,84 @@ namespace DantesInferno.Installer
             _worker.DoWork += Worker_DoWork;
             _worker.ProgressChanged += Worker_ProgressChanged;
             _worker.RunWorkerCompleted += Worker_RunWorkerCompleted;
+        }
+
+        private string T(string key)
+        {
+            return LauncherLocalizer.Get(_lang, key);
+        }
+
+        private string Tf(string key, params object[] args)
+        {
+            return LauncherLocalizer.Get(_lang, key, args);
+        }
+
+        private void DetectInstallerLanguage()
+        {
+            try
+            {
+                string culture = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+                _lang = LauncherLocalizer.NormalizeLanguage(culture);
+            }
+            catch
+            {
+                _lang = LauncherLocalizer.DefaultLanguage;
+            }
+        }
+
+        private void PopulateInstallerLanguageCombo()
+        {
+            _populatingLanguage = true;
+            var items = new List<KeyValuePair<string, string>>();
+            foreach (var code in LauncherLocalizer.SupportedLanguages)
+            {
+                string display = LauncherLocalizer.LanguageDisplayNames.ContainsKey(code)
+                    ? LauncherLocalizer.LanguageDisplayNames[code] : code;
+                items.Add(new KeyValuePair<string, string>(code, display));
+            }
+            InstallerLanguageCombo.ItemsSource = items;
+            InstallerLanguageCombo.DisplayMemberPath = "Value";
+            InstallerLanguageCombo.SelectedValuePath = "Key";
+            int idx = items.FindIndex(i => i.Key == _lang);
+            InstallerLanguageCombo.SelectedIndex = idx >= 0 ? idx : 0;
+            _populatingLanguage = false;
+        }
+
+        private void InstallerLanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_populatingLanguage)
+                return;
+            if (InstallerLanguageCombo.SelectedValue is string code)
+            {
+                _lang = LauncherLocalizer.NormalizeLanguage(code);
+                ApplyLocalization();
+                UpdateNavigation();
+            }
+        }
+
+        private void ApplyLocalization()
+        {
+            Title = T(LauncherLocalizer.InstTitle);
+            HeaderText.Text = T(LauncherLocalizer.InstHeader);
+            WelcomeTitleText.Text = T(LauncherLocalizer.InstWelcomeTitle);
+            WelcomeIntroText.Text = T(LauncherLocalizer.InstWelcomeIntro);
+            WelcomeStep1Text.Text = T(LauncherLocalizer.InstWelcomeStep1);
+            WelcomeStep2Text.Text = T(LauncherLocalizer.InstWelcomeStep2);
+            WelcomeStep3Text.Text = T(LauncherLocalizer.InstWelcomeStep3);
+            WelcomeStep4Text.Text = T(LauncherLocalizer.InstWelcomeStep4);
+            WelcomeStep5Text.Text = T(LauncherLocalizer.InstWelcomeStep5);
+            WelcomeLegalText.Text = T(LauncherLocalizer.InstWelcomeLegal);
+            InstallerLanguageLabel.Text = T(LauncherLocalizer.LabelLauncherLanguage);
+            DestTitleText.Text = T(LauncherLocalizer.InstDestTitle);
+            DestHintText.Text = T(LauncherLocalizer.InstDestHint);
+            BrowseDestButton.Content = T(LauncherLocalizer.InstBrowse);
+            IsoTitleText.Text = T(LauncherLocalizer.InstIsoTitle);
+            IsoHintText.Text = T(LauncherLocalizer.InstIsoHint);
+            BrowseIsoButton.Content = T(LauncherLocalizer.InstBrowse);
+            ProgressTitleText.Text = T(LauncherLocalizer.InstProgressTitle);
+            FinishTitleText.Text = T(LauncherLocalizer.InstFinishTitle);
+            CreateShortcutCheck.Content = T(LauncherLocalizer.InstCreateShortcut);
+            BackButton.Content = T(LauncherLocalizer.InstBack);
         }
 
         private void InitializeTheme()
@@ -137,7 +223,12 @@ namespace DantesInferno.Installer
 
             BackButton.IsEnabled = _step > 1 && _step < 5;
             NextButton.IsEnabled = _step != 4;
-            NextButton.Content = _step == 3 ? "Install" : (_step == 5 ? "Finish" : "Next");
+            if (_step == 3)
+                NextButton.Content = T(LauncherLocalizer.InstInstall);
+            else if (_step == 5)
+                NextButton.Content = T(LauncherLocalizer.InstFinish);
+            else
+                NextButton.Content = T(LauncherLocalizer.InstNext);
         }
 
         private void BackButton_Click(object sender, RoutedEventArgs e)
@@ -158,12 +249,12 @@ namespace DantesInferno.Installer
 
                 if (string.IsNullOrWhiteSpace(_destination) || !Directory.Exists(Path.GetDirectoryName(_destination)))
                 {
-                    MessageBox.Show("Please choose a valid destination folder.", "Invalid Destination", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(T(LauncherLocalizer.InstInvalidDestMsg), T(LauncherLocalizer.InstInvalidDestTitle), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
                 if (!File.Exists(_isoPath))
                 {
-                    MessageBox.Show("Please select a valid ISO file.", "Invalid ISO", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(T(LauncherLocalizer.InstInvalidIsoMsg), T(LauncherLocalizer.InstInvalidIsoTitle), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
@@ -193,7 +284,7 @@ namespace DantesInferno.Installer
         {
             var dialog = new System.Windows.Forms.FolderBrowserDialog
             {
-                Description = "Select the installation folder",
+                Description = T(LauncherLocalizer.InstFolderDialog),
                 SelectedPath = DestinationTextBox.Text
             };
             if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
@@ -205,7 +296,7 @@ namespace DantesInferno.Installer
             var dialog = new System.Windows.Forms.OpenFileDialog
             {
                 Filter = "Xbox ISO files (*.iso)|*.iso|All files (*.*)|*.*",
-                Title = "Select Dante's Inferno ISO"
+                Title = T(LauncherLocalizer.InstIsoDialog)
             };
             if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                 IsoTextBox.Text = dialog.FileName;
@@ -215,7 +306,7 @@ namespace DantesInferno.Installer
         {
             try
             {
-                _worker.ReportProgress(0, "Preparing destination...");
+                _worker.ReportProgress(0, T(LauncherLocalizer.InstPreparing));
                 Directory.CreateDirectory(_destination);
                 string gameDir = Path.Combine(_destination, "game");
 
@@ -225,11 +316,11 @@ namespace DantesInferno.Installer
                 {
                     if (Directory.Exists(gameDir))
                     {
-                        _worker.ReportProgress(5, "Removing old game data...");
+                        _worker.ReportProgress(5, T(LauncherLocalizer.InstRemovingOld));
                         try { Directory.Delete(gameDir, true); } catch { }
                     }
 
-                    _worker.ReportProgress(10, "Extracting ISO to game folder (this may take a few minutes)...");
+                    _worker.ReportProgress(10, T(LauncherLocalizer.InstExtracting));
                     string extractExe = GetPayloadFile("extract-xiso.exe");
                     if (!File.Exists(extractExe))
                         throw new FileNotFoundException("extract-xiso.exe was not found in the installer payload.");
@@ -259,10 +350,10 @@ namespace DantesInferno.Installer
                 }
                 else
                 {
-                    _worker.ReportProgress(45, "Game data already present, skipping extraction.");
+                    _worker.ReportProgress(45, T(LauncherLocalizer.InstSkipExtract));
                 }
 
-                _worker.ReportProgress(50, "Copying game files...");
+                _worker.ReportProgress(50, T(LauncherLocalizer.InstCopying));
                 string distDir = GetPayloadFile("dist");
                 if (!Directory.Exists(distDir))
                     throw new DirectoryNotFoundException("The 'dist' folder was not found in the installer payload.");
@@ -277,10 +368,10 @@ namespace DantesInferno.Installer
                     File.Copy(file, target, true);
                     index++;
                     int percent = 50 + (int)(35.0 * index / Math.Max(1, filesToCopy.Length));
-                    _worker.ReportProgress(percent, $"Copied {relative}");
+                    _worker.ReportProgress(percent, Tf(LauncherLocalizer.InstCopied, relative));
                 }
 
-                _worker.ReportProgress(88, "Updating configuration...");
+                _worker.ReportProgress(88, T(LauncherLocalizer.InstUpdatingConfig));
                 string configPath = Path.Combine(_destination, "dantes_inferno.toml");
                 var config = GameConfig.Load(configPath);
                 config.GameDataRoot = gameDir;
@@ -298,6 +389,8 @@ namespace DantesInferno.Installer
                 config.Fullscreen = true;
                 if (string.IsNullOrEmpty(config.InputBackend))
                     config.InputBackend = "sdl";
+                config.LauncherLanguage = _lang;
+                PreferGameLanguageFromDisc(config, gameDir);
                 config["dlc_source_path"] = Path.Combine(_destination, "dlc");
                 config.Save();
 
@@ -307,12 +400,12 @@ namespace DantesInferno.Installer
                 if (File.Exists(tuSrc))
                 {
                     string tuDst = Path.Combine(gameDir, "default.xexp");
-                    _worker.ReportProgress(91, "Copying Title Update 2 patch (default.xexp)...");
+                    _worker.ReportProgress(91, T(LauncherLocalizer.InstCopyTu));
                     File.Copy(tuSrc, tuDst, true);
                 }
                 else
                 {
-                    _worker.ReportProgress(91, "WARNING: default.xexp not found in payload - TU2 will not be applied.");
+                    _worker.ReportProgress(91, T(LauncherLocalizer.InstTuMissing));
                 }
 
                 string versionFile = GetPayloadFile("version.txt");
@@ -324,12 +417,30 @@ namespace DantesInferno.Installer
 
                 RegisterInAddRemovePrograms(_destination, version.ToString());
 
-                _worker.ReportProgress(100, "Installation complete.");
+                _worker.ReportProgress(100, T(LauncherLocalizer.InstComplete));
             }
             catch (Exception ex)
             {
                 _worker.ReportProgress(0, "ERROR: " + ex.Message);
                 e.Result = ex;
+            }
+        }
+
+        private void PreferGameLanguageFromDisc(GameConfig config, string gameDir)
+        {
+            // Prefer matching installer UI language only when present on disc.
+            uint? preferred = null;
+            if (_lang == "it") preferred = 6;
+            else if (_lang == "es") preferred = 5;
+            else if (_lang == "fr") preferred = 4;
+            else if (_lang == "pt") preferred = 9;
+            else preferred = 1;
+
+            var disc = LanguageManifest.GetDiscTextLanguages(gameDir);
+            if (disc != null && preferred.HasValue &&
+                disc.Exists(e => e.Id == preferred.Value))
+            {
+                config.UserLanguage = preferred.Value;
             }
         }
 
@@ -368,7 +479,7 @@ namespace DantesInferno.Installer
 
             if (e.Result is Exception ex)
             {
-                MessageBox.Show("Installation failed:\n" + ex.Message, "Install Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(Tf(LauncherLocalizer.InstFailedMsg, ex.Message), T(LauncherLocalizer.InstFailedTitle), MessageBoxButton.OK, MessageBoxImage.Error);
                 _step = 3;
                 UpdateNavigation();
                 return;
@@ -376,7 +487,10 @@ namespace DantesInferno.Installer
 
             InstallProgress.Value = 100;
             _step = 5;
-            FinishSummary.Text = $"Installed to:\n{_destination}\n\nGame data extracted to:\n{Path.Combine(_destination, "game")}\n\nClick Finish to close the installer.";
+            FinishSummary.Text = Tf(
+                LauncherLocalizer.InstFinishSummary,
+                _destination,
+                Path.Combine(_destination, "game"));
             UpdateNavigation();
         }
 
@@ -401,7 +515,7 @@ namespace DantesInferno.Installer
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Could not create desktop shortcut:\n" + ex.Message, "Shortcut Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Tf(LauncherLocalizer.InstShortcutErrorMsg, ex.Message), T(LauncherLocalizer.InstShortcutErrorTitle), MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 

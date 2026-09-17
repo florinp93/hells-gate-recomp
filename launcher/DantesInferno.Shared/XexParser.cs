@@ -122,10 +122,22 @@ namespace DantesInferno
         /// NTSC-U: English, French, Spanish
         /// NTSC-J: Japanese, English
         /// PAL: English, French, German, Spanish, Italian
+        /// Region-free (0xFFFFFFFF / all bits): treat as full MULTI set (PAL + NTSC).
         /// </summary>
         public static List<uint> GetSupportedLanguages(uint region)
         {
             var languages = new List<uint>();
+
+            // Fully unlocked / region-free dumps (common MULTI5 scene tags).
+            if (region == 0xFFFFFFFF)
+            {
+                languages.Add(1); // English
+                languages.Add(3); // German
+                languages.Add(4); // French
+                languages.Add(5); // Spanish
+                languages.Add(6); // Italian
+                return languages;
+            }
 
             bool isNtscU = (region & XEX_REGION_NTSCU) != 0;
             bool isNtscJ = (region & XEX_REGION_NTSCJ) != 0;

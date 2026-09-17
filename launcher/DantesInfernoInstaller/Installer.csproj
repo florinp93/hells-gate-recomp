@@ -8,7 +8,7 @@
     <OutputType>winexe</OutputType>
     <RootNamespace>DantesInferno</RootNamespace>
     <AssemblyName>DantesInfernoInstaller</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ProjectTypeGuids>{60dc8134-eba5-43b8-bcc9-bb8a0c7d8e3e};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <WarningLevel>4</WarningLevel>
@@ -85,6 +85,12 @@
     </Compile>
     <Compile Include="..\DantesInferno.Shared\LauncherLocalizer.cs">
       <Link>Shared\LauncherLocalizer.cs</Link>
+    </Compile>
+    <Compile Include="..\DantesInferno.Shared\LanguageManifest.cs">
+      <Link>Shared\LanguageManifest.cs</Link>
+    </Compile>
+    <Compile Include="..\DantesInferno.Shared\XexParser.cs">
+      <Link>Shared\XexParser.cs</Link>
     </Compile>
     <Compile Include="..\DantesInferno.Shared\PathHelper.cs">
       <Link>Shared\PathHelper.cs</Link>

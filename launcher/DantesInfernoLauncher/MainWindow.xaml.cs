@@ -328,11 +328,11 @@ namespace DantesInferno.Launcher
 
         private void PopulateLanguageCombo()
         {
-            
             var languageItems = new List<KeyValuePair<uint, string>>();
             string gameDir = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
             string xexPath = Path.Combine(gameDir, "default.xex");
 
+            // Manifest is authoritative: only languages actually present on the disc.
             var discLangs = LanguageManifest.GetDiscTextLanguages(gameDir);
             if (discLangs != null)
             {
@@ -345,11 +345,11 @@ namespace DantesInferno.Launcher
             }
             else if (File.Exists(xexPath))
             {
+                // No manifest: fall back to XEX region flags.
                 var xexInfo = XexParser.Parse(xexPath);
                 if (xexInfo != null)
                 {
-                    var supported = XexParser.GetSupportedLanguages(xexInfo.Region);
-                    foreach (uint langId in supported)
+                    foreach (uint langId in XexParser.GetSupportedLanguages(xexInfo.Region))
                     {
                         if (XexParser.LanguageNames.TryGetValue(langId, out string name))
                             languageItems.Add(new KeyValuePair<uint, string>(langId, name));

@@ -12,56 +12,60 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="DANTE'S INFERNO - INSTALLER" FontSize="24" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" Margin="0,0,0,15" />
+        <TextBlock x:Name="HeaderText" Grid.Row="0" Text="DANTE'S INFERNO - INSTALLER" FontSize="24" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" Margin="0,0,0,15" />
 
         <Grid Grid.Row="1" x:Name="WizardContent">
 
             <StackPanel x:Name="Step1Welcome" Visibility="Visible">
-                <TextBlock Text="Welcome to the Nine Circles." FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
-                <TextBlock Text="This installer will:" FontSize="14" Margin="0,0,0,5" />
-                <TextBlock Text="- Ask for the destination folder" Margin="20,2" />
-                <TextBlock Text="- Ask for your original game ISO" Margin="20,2" />
-                <TextBlock Text="- Extract the ISO into the destination" Margin="20,2" />
-                <TextBlock Text="- Copy the PC port files into the destination" Margin="20,2" />
-                <TextBlock Text="- Create a desktop shortcut" Margin="20,2" />
-                <TextBlock Text="You must own a legal copy of the Xbox 360 game disc or ISO." FontSize="12" Opacity="0.7" Margin="0,20,0,0" />
+                <TextBlock x:Name="WelcomeTitleText" Text="Welcome to the Nine Circles." FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
+                <TextBlock x:Name="WelcomeIntroText" Text="This installer will:" FontSize="14" Margin="0,0,0,5" />
+                <TextBlock x:Name="WelcomeStep1Text" Text="- Ask for the destination folder" Margin="20,2" />
+                <TextBlock x:Name="WelcomeStep2Text" Text="- Ask for your original game ISO" Margin="20,2" />
+                <TextBlock x:Name="WelcomeStep3Text" Text="- Extract the ISO into the destination" Margin="20,2" />
+                <TextBlock x:Name="WelcomeStep4Text" Text="- Copy the PC port files into the destination" Margin="20,2" />
+                <TextBlock x:Name="WelcomeStep5Text" Text="- Create a desktop shortcut" Margin="20,2" />
+                <TextBlock x:Name="WelcomeLegalText" Text="You must own a legal copy of the Xbox 360 game disc or ISO." FontSize="12" Opacity="0.7" Margin="0,20,0,0" />
+                <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                    <TextBlock x:Name="InstallerLanguageLabel" Text="Language:" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <ComboBox x:Name="InstallerLanguageCombo" Width="160" SelectionChanged="InstallerLanguageCombo_SelectionChanged" />
+                </StackPanel>
             </StackPanel>
 
             <StackPanel x:Name="Step2Destination" Visibility="Collapsed">
-                <TextBlock Text="Choose Installation Folder" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
+                <TextBlock x:Name="DestTitleText" Text="Choose Installation Folder" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
                 <Grid Margin="0,10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBox x:Name="DestinationTextBox" Grid.Column="0" Text="C:\Games\DantesInferno" />
-                    <Button Grid.Column="1" Content="Browse" Width="80" Margin="5,0,0,0" Click="BrowseDestination_Click" />
+                    <Button x:Name="BrowseDestButton" Grid.Column="1" Content="Browse" Width="80" Margin="5,0,0,0" Click="BrowseDestination_Click" />
                 </Grid>
-                <TextBlock Text="The game will be installed into this folder." FontSize="12" Opacity="0.7" />
+                <TextBlock x:Name="DestHintText" Text="The game will be installed into this folder." FontSize="12" Opacity="0.7" />
             </StackPanel>
 
             <StackPanel x:Name="Step3Iso" Visibility="Collapsed">
-                <TextBlock Text="Select Game ISO" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
+                <TextBlock x:Name="IsoTitleText" Text="Select Game ISO" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
                 <Grid Margin="0,10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBox x:Name="IsoTextBox" Grid.Column="0" />
-                    <Button Grid.Column="1" Content="Browse" Width="80" Margin="5,0,0,0" Click="BrowseIso_Click" />
+                    <Button x:Name="BrowseIsoButton" Grid.Column="1" Content="Browse" Width="80" Margin="5,0,0,0" Click="BrowseIso_Click" />
                 </Grid>
-                <TextBlock Text="Select a Dante's Inferno Xbox 360 ISO file (XISO)." FontSize="12" Opacity="0.7" />
+                <TextBlock x:Name="IsoHintText" Text="Select a Dante's Inferno Xbox 360 ISO file (XISO)." FontSize="12" Opacity="0.7" />
             </StackPanel>
 
             <StackPanel x:Name="Step4Progress" Visibility="Collapsed">
-                <TextBlock Text="Installing..." FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
+                <TextBlock x:Name="ProgressTitleText" Text="Installing..." FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
                 <ProgressBar x:Name="InstallProgress" Minimum="0" Maximum="100" Value="0" Margin="0,10" />
                 <TextBlock x:Name="CurrentOperationText" Text="" FontSize="12" Opacity="0.8" Margin="0,0,0,5" />
                 <TextBox x:Name="LogTextBox" IsReadOnly="True" VerticalScrollBarVisibility="Auto" Height="200" Background="{StaticResource BackgroundPanel}" Foreground="{StaticResource TextBrush}" BorderBrush="{StaticResource BorderBrush}" Padding="10" FontFamily="Consolas" FontSize="12" />
             </StackPanel>
 
             <StackPanel x:Name="Step5Finish" Visibility="Collapsed">
-                <TextBlock Text="Installation Complete" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
+                <TextBlock x:Name="FinishTitleText" Text="Installation Complete" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" />
                 <TextBlock x:Name="FinishSummary" Text="" TextWrapping="Wrap" Margin="0,0,0,15" />
                 <CheckBox x:Name="CreateShortcutCheck" Content="Create desktop shortcut" IsChecked="True" />
             </StackPanel>
