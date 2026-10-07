@@ -291,6 +291,25 @@ class DantesInfernoApp : public rex::ReXApp {
       }
     });
 
+    rex::ui::RegisterBind("bind_pass_trace", "F6",
+                          "Trace GPU passes for 5 seconds", [this] {
+      bool ok = rex::cvar::SetFlagByName("gpu_pass_trace_frames", "300");
+      REXLOG_INFO("PASS-TRACE trigger: set={} value={}", ok,
+                  rex::cvar::Query<int32_t>("gpu_pass_trace_frames"));
+    });
+
+    rex::ui::RegisterBind("bind_d3d_trace", "F8",
+                          "Trace D3D API calls for 3 frames", [this] {
+      bool ok = rex::cvar::SetFlagByName("d3d_trace_frames", "3");
+      REXLOG_INFO("D3D-TRACE trigger: set={}", ok);
+    });
+
+    rex::ui::RegisterBind("bind_native_observe", "F9",
+                          "M2 shadow observer for 3 frames", [this] {
+      bool ok = rex::cvar::SetFlagByName("native_observe_frames", "3");
+      REXLOG_INFO("NATIVE-OBS trigger: set={}", ok);
+    });
+
     rex::ui::RegisterBind("bind_fast_forward", "F2",
                           "Toggle 50x fast-forward", [this] {
       double current = REXCVAR_GET(time_scalar);
@@ -411,6 +430,9 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnShutdown() override {
     rex::ui::UnregisterBind("bind_fast_forward");
+    rex::ui::UnregisterBind("bind_pass_trace");
+    rex::ui::UnregisterBind("bind_d3d_trace");
+    rex::ui::UnregisterBind("bind_native_observe");
     rex::ui::UnregisterBind("bind_fps_overlay");
     rex::ui::UnregisterBind("bind_exit_game");
     rex::cvar::UnregisterChangeCallbacks("time_scalar");

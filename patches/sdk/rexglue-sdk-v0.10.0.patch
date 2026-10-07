@@ -24,18 +24,25 @@ index af35fa8..0ab179e 100644
      "Root of the fetched FidelityFX SDK source tree")
  
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
-index da8e432..faa0153 100644
+index da8e432..4c5c06e 100644
 --- a/include/rex/graphics/command_processor.h
 +++ b/include/rex/graphics/command_processor.h
-@@ -12,6 +12,7 @@
+@@ -12,11 +12,14 @@
  #pragma once
  
  #include <atomic>
 +#include <condition_variable>
  #include <cstring>
  #include <functional>
++#include <map>
  #include <memory>
-@@ -84,8 +85,19 @@ class CommandProcessor {
+ #include <mutex>
+ #include <queue>
++#include <set>
+ #include <string>
+ #include <unordered_map>
+ #include <vector>
+@@ -84,8 +87,19 @@ class CommandProcessor {
    CommandProcessor(GraphicsSystem* graphics_system, system::KernelState* kernel_state);
    virtual ~CommandProcessor();
  
@@ -57,7 +64,7 @@ index da8e432..faa0153 100644
  
    Shader* active_vertex_shader() const { return active_vertex_shader_; }
    Shader* active_pixel_shader() const { return active_pixel_shader_; }
-@@ -221,6 +233,10 @@ class CommandProcessor {
+@@ -221,6 +235,40 @@ class CommandProcessor {
                           IndexBufferInfo* index_buffer_info, bool major_mode_explicit) = 0;
    virtual bool IssueCopy() = 0;
  
@@ -65,10 +72,40 @@ index da8e432..faa0153 100644
 +  void TraceVertexFetchOOB(const Shader& vertex_shader, uint32_t index_count,
 +                           const IndexBufferInfo* index_buffer_info);
 +
++  // Per-frame render-pass tracing for gpu_pass_trace_frames. Draws are grouped
++  // by their bound render-target signature; a summary is dumped at each swap.
++  struct PassTraceKey {
++    uint32_t color_base[4] = {};
++    uint32_t color_format[4] = {};
++    uint32_t depth_base = 0;
++    uint32_t depth_format = 0;
++    uint32_t surface_pitch = 0;
++    uint32_t msaa_samples = 0;
++    bool operator<(const PassTraceKey& other) const {
++      return std::memcmp(this, &other, sizeof(PassTraceKey)) < 0;
++    }
++  };
++  struct PassTraceStats {
++    uint32_t draws = 0;
++    uint64_t indices = 0;
++    uint32_t prim_type_mask = 0;
++    std::set<uint64_t> shader_hashes;
++  };
++  // Chronological record: consecutive draws sharing an RT signature are
++  // collapsed into one segment, preserving the frame's actual render order.
++  struct PassTraceSegment {
++    PassTraceKey key;
++    PassTraceStats stats;
++  };
++  void TraceDrawForPass(const reg::VGT_DRAW_INITIATOR& draw_initiator);
++  void DumpPassTrace();
++  std::map<PassTraceKey, PassTraceStats> pass_trace_;
++  std::vector<PassTraceSegment> pass_trace_timeline_;
++
    // "Actual" is for the command processor thread, to be read by the
    // implementations.
    SwapPostEffect GetActualSwapPostEffect() const { return swap_post_effect_actual_; }
-@@ -243,7 +259,12 @@ class CommandProcessor {
+@@ -243,7 +291,12 @@ class CommandProcessor {
    // MicroEngine binary from PM4_ME_INIT
    std::vector<uint32_t> me_bin_;
  
@@ -1108,10 +1145,15 @@ index 163c257..c01e0e3 100644
  }
  
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..646b654 100644
+index a744375..593b87d 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -14,6 +14,7 @@
+@@ -10,10 +10,12 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cinttypes>
  #include <cmath>
  #include <cstring>
  #include <string_view>
@@ -1119,7 +1161,7 @@ index a744375..646b654 100644
  
  #include <fmt/format.h>
  
-@@ -24,6 +25,7 @@
+@@ -24,6 +26,7 @@
  #include <rex/graphics/command_processor.h>
  #include <rex/graphics/flags.h>
  #include <rex/graphics/graphics_system.h>
@@ -1127,22 +1169,63 @@ index a744375..646b654 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/sampler_info.h>
  #include <rex/graphics/xenos.h>
-@@ -37,6 +39,11 @@
+@@ -32,11 +35,47 @@
+ #include <rex/memory.h>
+ #include <rex/memory/ring_buffer.h>
+ #include <rex/stream.h>
++#include <rex/system/gpu_plugin.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/user_module.h>
  
  REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
  
++// Diagnostic draw observer registered by the host executable. Called on the
++// command processor thread after each draw; packet_end (guest physical, just
++// past the draw packet) identifies the draw, usage is null if not analyzed.
++struct RexGpuDrawUsage {
++  uint32_t struct_size;
++  uint32_t vs_float_base;  // vec4 index of VS c0 in the 512-entry float file
++  uint32_t ps_float_base;
++  uint32_t float_dynamic;  // bit 0: VS, bit 1: PS index constants dynamically
++  uint64_t vs_float[4];    // float constants read, relative to the bases
++  uint64_t ps_float[4];
++  uint32_t vertex_fetch[3];  // vertex fetch constants 0-95 read by the VS
++  uint32_t texture_fetch;    // fetch constants 0-31 sampled as textures
++};
++using RexGpuDrawObserverFn = void (*)(void* user, const uint32_t* registers,
++                                      uint32_t register_count, uint32_t draw_initiator,
++                                      uint32_t packet_end, const RexGpuDrawUsage* usage);
++static std::atomic<RexGpuDrawObserverFn> g_draw_observer{nullptr};
++static std::atomic<void*> g_draw_observer_user{nullptr};
++
++extern "C" REX_GPU_PLUGIN_EXPORT void rex_gpu_set_draw_observer(RexGpuDrawObserverFn fn,
++                                                                void* user) {
++  g_draw_observer_user.store(user, std::memory_order_relaxed);
++  g_draw_observer.store(fn, std::memory_order_release);
++}
++
 +REXCVAR_DEFINE_BOOL(vfetch_oob_trace, true, "Diagnostics",
 +                    "Log draws whose vertex fetches read outside the declared "
 +                    "buffer bounds. Xenos returns 0 for OOB vfetch words; "
 +                    "shared-memory loads return adjacent guest memory.");
 +
++REXCVAR_DEFINE_INT32(gpu_pass_trace_frames, 0, "Diagnostics",
++                     "Dump a per-pass draw summary at each swap for the next N "
++                     "frames (grouped by bound render-target signature)")
++    .range(0, 100000);
++
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
                      "Disable for minor CPU overhead reduction, but may break memory coherency.")
-@@ -958,9 +965,23 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+@@ -958,9 +997,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
    uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
    reader->AdvanceRead((count - 4) * sizeof(uint32_t));
  
++  if (REXCVAR_GET(gpu_pass_trace_frames) > 0) {
++    DumpPassTrace();
++    REXCVAR_SET(gpu_pass_trace_frames, REXCVAR_GET(gpu_pass_trace_frames) - 1);
++  }
++
 +  if (REXCVAR_GET(vsync)) {
 +    // One swap per vblank tick, matching hardware flip timing. Blocking the
 +    // CP here paces the guest through ring-buffer backpressure.
@@ -1163,7 +1246,7 @@ index a744375..646b654 100644
    return true;
  }
  
-@@ -1206,7 +1227,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+@@ -1206,7 +1264,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
    uint32_t data_value;
    if ((initiator >> 31) & 0x1) {
      // Write counter (GPU vblank counter?).
@@ -1172,7 +1255,7 @@ index a744375..646b654 100644
    } else {
      // Write value.
      data_value = value;
-@@ -1282,6 +1303,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+@@ -1282,6 +1340,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
    return true;
  }
  
@@ -1257,6 +1340,124 @@ index a744375..646b654 100644
  bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32_t packet,
                                                const char* opcode_name, uint32_t viz_query_condition,
                                                uint32_t count_remaining) {
+@@ -1368,6 +1504,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+   // we don't support yet.
+   reader->AdvanceRead(count_remaining * sizeof(uint32_t));
+ 
++  uint32_t observer_packet_end =
++      uint32_t(reader->read_ptr() - uintptr_t(memory_->TranslatePhysical(0)));
++
+   if (draw_succeeded) {
+     auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
+     if (!(viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z)) {
+@@ -1378,6 +1517,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+ 
+       bool major_mode_explicit =
+           xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
++      if (REXCVAR_GET(gpu_pass_trace_frames) > 0) {
++        TraceDrawForPass(vgt_draw_initiator);
++      }
+       draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
+                                  is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
+       if (!draw_succeeded) {
+@@ -1400,6 +1542,36 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+   // for instance, features not supported by the host), don't terminate command
+   // buffer processing as that would leave rendering in a way more inconsistent
+   // state than just a single dropped draw command.
++  if (auto observer = g_draw_observer.load(std::memory_order_acquire)) {
++    RexGpuDrawUsage usage = {};
++    usage.struct_size = sizeof(usage);
++    const RexGpuDrawUsage* usage_ptr = nullptr;
++    if (active_vertex_shader_ && active_vertex_shader_->is_ucode_analyzed() &&
++        (!active_pixel_shader_ || active_pixel_shader_->is_ucode_analyzed())) {
++      usage.vs_float_base = register_file_->values[XE_GPU_REG_SQ_VS_CONST] & 0x1FF;
++      usage.ps_float_base = register_file_->values[XE_GPU_REG_SQ_PS_CONST] & 0x1FF;
++      const auto& vs_map = active_vertex_shader_->constant_register_map();
++      std::memcpy(usage.vs_float, vs_map.float_bitmap, sizeof(usage.vs_float));
++      std::memcpy(usage.vertex_fetch, vs_map.vertex_fetch_bitmap, sizeof(usage.vertex_fetch));
++      usage.float_dynamic |= vs_map.float_dynamic_addressing ? 1u : 0u;
++      for (const auto& binding : active_vertex_shader_->texture_bindings()) {
++        usage.texture_fetch |= 1u << (binding.fetch_constant & 31);
++      }
++      if (active_pixel_shader_) {
++        const auto& ps_map = active_pixel_shader_->constant_register_map();
++        std::memcpy(usage.ps_float, ps_map.float_bitmap, sizeof(usage.ps_float));
++        usage.float_dynamic |= ps_map.float_dynamic_addressing ? 2u : 0u;
++        for (const auto& binding : active_pixel_shader_->texture_bindings()) {
++          usage.texture_fetch |= 1u << (binding.fetch_constant & 31);
++        }
++      }
++      usage_ptr = &usage;
++    }
++    observer(g_draw_observer_user.load(std::memory_order_relaxed), register_file_->values,
++             uint32_t(RegisterFile::kRegisterCount), vgt_draw_initiator.value,
++             observer_packet_end, usage_ptr);
++  }
++
+   return true;
+ }
+ 
+@@ -1611,4 +1783,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
+   return true;
+ }
+ 
++void CommandProcessor::TraceDrawForPass(const reg::VGT_DRAW_INITIATOR& draw_initiator) {
++  PassTraceKey key;
++  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++    auto color_info =
++        register_file_->Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
++    key.color_base[i] = color_info.color_base;
++    key.color_format[i] = uint32_t(color_info.color_format);
++  }
++  auto depth_info = register_file_->Get<reg::RB_DEPTH_INFO>();
++  key.depth_base = depth_info.depth_base;
++  key.depth_format = uint32_t(depth_info.depth_format);
++  auto surface_info = register_file_->Get<reg::RB_SURFACE_INFO>();
++  key.surface_pitch = surface_info.surface_pitch;
++  key.msaa_samples = uint32_t(surface_info.msaa_samples);
++
++  auto accumulate = [&key, &draw_initiator, this](PassTraceStats& stats) {
++    ++stats.draws;
++    stats.indices += draw_initiator.num_indices;
++    stats.prim_type_mask |= uint32_t(1) << uint32_t(draw_initiator.prim_type);
++    if (active_vertex_shader_) {
++      stats.shader_hashes.insert(active_vertex_shader_->ucode_data_hash());
++    }
++    if (active_pixel_shader_) {
++      stats.shader_hashes.insert(active_pixel_shader_->ucode_data_hash());
++    }
++  };
++
++  accumulate(pass_trace_[key]);
++
++  if (pass_trace_timeline_.empty() ||
++      std::memcmp(&pass_trace_timeline_.back().key, &key, sizeof(key)) != 0) {
++    pass_trace_timeline_.push_back({key, {}});
++  }
++  accumulate(pass_trace_timeline_.back().stats);
++}
++
++void CommandProcessor::DumpPassTrace() {
++  REXGPU_INFO("PASS-TRACE frame {}: {} segments, {} groups", swap_counter(),
++              pass_trace_timeline_.size(), pass_trace_.size());
++  uint32_t seg_index = 0;
++  for (const auto& seg : pass_trace_timeline_) {
++    const auto& key = seg.key;
++    const auto& stats = seg.stats;
++    REXGPU_INFO(
++        "  seg {}: color=[{:X}:f{} {:X}:f{} {:X}:f{} {:X}:f{}] depth={:X}:f{} pitch={} "
++        "msaa={} draws={} indices={} prims=0x{:02X} shaders={}",
++        seg_index++, key.color_base[0], key.color_format[0], key.color_base[1],
++        key.color_format[1], key.color_base[2], key.color_format[2], key.color_base[3],
++        key.color_format[3], key.depth_base, key.depth_format, key.surface_pitch,
++        key.msaa_samples, stats.draws, stats.indices, stats.prim_type_mask,
++        stats.shader_hashes.size());
++  }
++  pass_trace_.clear();
++  pass_trace_timeline_.clear();
++}
++
+ }  // namespace rex::graphics
 diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
 index 19874a5..f8ec76e 100644
 --- a/src/graphics/d3d12/command_processor.cpp
@@ -4229,9 +4430,3 @@ index 23645ef..110e310 100644
      // Limiting the frame rate, but lets too long frames cause tearing not to
      // make the latency even worse.
      swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-diff --git a/thirdparty/libmspack b/thirdparty/libmspack
---- a/thirdparty/libmspack
-+++ b/thirdparty/libmspack
-@@ -1 +1 @@
--Subproject commit 305907723a4e7ab2018e58040059ffb5e77db837
-+Subproject commit 305907723a4e7ab2018e58040059ffb5e77db837-dirty

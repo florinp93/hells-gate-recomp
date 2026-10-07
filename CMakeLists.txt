@@ -36,6 +36,9 @@ endif()
 
 set(DANTESINFERNO_SOURCES
     src/main.cpp
+    # D3D hooks: strong overrides of the generated weak aliases, so in the exe.
+    src/native_renderer/d3d_trace.cpp
+    src/native_renderer/native_observer.cpp
 )
 
 if(WIN32)
@@ -221,6 +224,8 @@ if(DANTESINFERNO_NATIVE_RENDERER)
 
     set(DANTESINFERNO_NATIVE_SOURCES
         src/native_renderer/dantes_inferno_native_main.cpp
+        src/native_renderer/d3d_trace.cpp
+        src/native_renderer/native_observer.cpp
     )
     if(WIN32)
         list(APPEND DANTESINFERNO_NATIVE_SOURCES src/dantes_inferno.rc)
