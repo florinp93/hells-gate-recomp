@@ -1,8 +1,8 @@
 diff --git a/cmake/rexglue_fidelityfx.cmake b/cmake/rexglue_fidelityfx.cmake
-index af35fa8..0ab179e 100644
+index af35fa8..939a3d1 100644
 --- a/cmake/rexglue_fidelityfx.cmake
 +++ b/cmake/rexglue_fidelityfx.cmake
-@@ -58,6 +58,20 @@ if(NOT fidelityfx_POPULATED)
+@@ -58,6 +58,41 @@ if(NOT fidelityfx_POPULATED)
      FetchContent_Populate(fidelityfx)
  endif()
  
@@ -17,6 +17,27 @@ index af35fa8..0ab179e 100644
 +                "$rc = '${_ffx_dll_rc}'; $bytes = [System.IO.File]::ReadAllBytes($rc); if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $text = [System.IO.File]::ReadAllText($rc, [System.Text.Encoding]::Unicode); [System.IO.File]::WriteAllText($rc, $text, [System.Text.Encoding]::UTF8) }"
 +            RESULT_VARIABLE _ffx_dll_rc_conversion
 +        )
++    endif()
++endif()
++
++# The shader permutation commands run through /bin/sh. Where that is bash
++# (openSUSE, Fedora, Arch), brace expansion splits -DOPT={0,1} into
++# -DOPT=0 -DOPT=1 and FidelityFX_SC fails with "Macro redefined". Escape the
++# braces once after population so the permutation syntax reaches the tool.
++if(UNIX)
++    set(_ffx_compile_shaders "${fidelityfx_SOURCE_DIR}/sdk/include/FidelityFX/gpu/CMakeCompileShaders.txt")
++    if(EXISTS "${_ffx_compile_shaders}")
++        file(READ "${_ffx_compile_shaders}" _ffx_compile_shaders_text)
++        string(FIND "${_ffx_compile_shaders_text}" [=[REPLACE "{" "\\{" SC_ARGS]=] _ffx_braces_escaped)
++        if(_ffx_braces_escaped EQUAL -1)
++            string(REPLACE
++                [=[set(SC_ARGS ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})]=]
++                [=[set(SC_ARGS ${BASE_ARGS} ${API_BASE_ARGS} ${PERMUTATION_ARGS})
++		string(REPLACE "{" "\\{" SC_ARGS "${SC_ARGS}")
++		string(REPLACE "}" "\\}" SC_ARGS "${SC_ARGS}")]=]
++                _ffx_compile_shaders_text "${_ffx_compile_shaders_text}")
++            file(WRITE "${_ffx_compile_shaders}" "${_ffx_compile_shaders_text}")
++        endif()
 +    endif()
 +endif()
 +
@@ -1144,6 +1165,26 @@ index 163c257..c01e0e3 100644
    return nullptr;
  }
  
+diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
+index 0d8f8af..a595861 100644
+--- a/src/graphics/CMakeLists.txt
++++ b/src/graphics/CMakeLists.txt
+@@ -110,6 +110,15 @@ target_include_directories(rexgpu-xenos PRIVATE
+     ${REXGLUE_ROOT}  # For thirdparty/dxbc/DXBCChecksum.h include
+ )
+ 
++# vulkan/api.h pulls in <wayland-client.h>. rexui gets its include path from
++# pkg-config, but this plugin links rexruntime instead, so it needs its own.
++# Distros such as openSUSE keep the header under /usr/include/wayland.
++if(UNIX AND NOT APPLE)
++    find_package(PkgConfig REQUIRED)
++    pkg_check_modules(WAYLAND REQUIRED wayland-client)
++    target_include_directories(rexgpu-xenos PRIVATE ${WAYLAND_INCLUDE_DIRS})
++endif()
++
+ target_compile_options(rexgpu-xenos PRIVATE -Wno-unused-variable)
+ 
+ rex_target_pch(rexgpu-xenos
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
 index a744375..f6314ab 100644
 --- a/src/graphics/command_processor.cpp
