@@ -514,7 +514,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   if (indexed) {
     uint32_t dma_base = regs.values[rg::XE_GPU_REG_VGT_DMA_BASE];
     auto dma_size = regs.Get<reg::VGT_DMA_SIZE>();
-    const uint8_t* src = Physical(base, dma_base & ~3u);
+    const uint8_t* src = Physical(base, dma_base & ~(index32 ? 3u : 1u));
     // Primitive reset only applies to strips (as in the SDK primitive processor).
     bool reset_enabled = regs.Get<reg::PA_SU_SC_MODE_CNTL>().multi_prim_ib_ena &&
                          (topology == dl::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
@@ -740,7 +740,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   key.color_count = targets.color_count;
   for (uint32_t i = 0; i < targets.color_count; ++i) key.color_format[i] = targets.color_format[i];
   key.depth_format = targets.depth ? targets.depth_format : 0;
-  key.color_mask = regs.values[rg::XE_GPU_REG_RB_COLOR_MASK] & 0xFFFF;
+  // Only the render targets the pixel shader writes (none without one), as the SDK.
+  key.color_mask = shaders.pixel_info ? rg::draw_util::GetNormalizedColorMask(
+                                            regs, shaders.pixel_info->writes_color_targets())
+                                      : 0;
   key.depth_enable = targets.depth && depth_control.z_enable;
   key.depth_write = targets.depth && depth_control.z_write_enable;
   key.depth_func = uint32_t(depth_control.zfunc) + 1;  // xenos -> COMPARISON_FUNCTION

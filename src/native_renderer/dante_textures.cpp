@@ -10,6 +10,7 @@
 #include <rex/graphics/pipeline/texture/conversion.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/pipeline/texture/util.h>
+#include <rex/cvar.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging/macros.h>
 
@@ -634,10 +635,23 @@ dl::ISampler* TextureCache::GetSampler(const uint32_t fetch_dwords[6], uint32_t 
   xenos::ClampMode clamp_x, clamp_y, clamp_z;
   rg::texture_util::GetClampModesForDimension(fetch, clamp_x, clamp_y, clamp_z);
   uint32_t mip_min = fetch.mip_min_level, mip_max = std::max(fetch.mip_min_level, fetch.mip_max_level);
-  if (mip_filter == uint32_t(xenos::TextureFilter::kBaseMap)) mip_min = mip_max = 0;
+  bool base_map = mip_filter == uint32_t(xenos::TextureFilter::kBaseMap);
+  // The anisotropic_override graphics option, applied as the SDK texture cache does.
+  int32_t aniso_override = rex::cvar::Query<int32_t>("anisotropic_override");
+  constexpr uint32_t kLinear = uint32_t(xenos::TextureFilter::kLinear);
+  if (aniso_override >= 0 && aniso_override < 6 && mip_max > mip_min && !base_map &&
+      mag_filter == kLinear && min_filter == kLinear &&
+      (mip_filter == uint32_t(xenos::TextureFilter::kPoint) || mip_filter == kLinear)) {
+    aniso_filter = uint32_t(aniso_override);
+  }
+  if (base_map) mip_min = mip_max = 0;
+  bool border = xenos::ClampModeUsesBorder(clamp_x) || xenos::ClampModeUsesBorder(clamp_y) ||
+                xenos::ClampModeUsesBorder(clamp_z);
+  uint32_t border_color = border ? uint32_t(fetch.border_color) : 0;
   uint64_t key = mag_filter | (min_filter << 2) | (mip_filter << 4) | (aniso_filter << 6) |
                  (uint32_t(clamp_x) << 9) | (uint32_t(clamp_y) << 12) | (uint32_t(clamp_z) << 15) |
-                 (uint64_t(mip_min) << 18) | (uint64_t(mip_max) << 22);
+                 (uint64_t(mip_min) << 18) | (uint64_t(mip_max) << 22) |
+                 (uint64_t(border_color) << 26);
   auto it = m.samplers.find(key);
   if (it != m.samplers.end()) return it->second;
 
@@ -658,6 +672,9 @@ dl::ISampler* TextureCache::GetSampler(const uint32_t fetch_dwords[6], uint32_t 
   desc.AddressU = AddressMode(clamp_x);
   desc.AddressV = AddressMode(clamp_y);
   desc.AddressW = AddressMode(clamp_z);
+  if (border_color == uint32_t(xenos::BorderColor::k_ABGR_White)) {
+    desc.BorderColor[0] = desc.BorderColor[1] = desc.BorderColor[2] = desc.BorderColor[3] = 1.0f;
+  }
   dl::RefCntAutoPtr<dl::ISampler> sampler;
   m.device->CreateSampler(desc, &sampler);
   m.samplers.emplace(key, sampler);

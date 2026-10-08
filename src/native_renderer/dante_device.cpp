@@ -447,6 +447,8 @@ struct LoadedShader {
   uint32_t address = 0, dwords = 0;
 };
 LoadedShader g_loaded_vs;
+// Pixel shader microcode of the last draw with a D3D pixel shader set.
+GuestShaderCode g_last_ps;
 // Index buffer of the last submitted draw (M2 observer cross-check).
 uint32_t g_last_index_base = 0, g_last_index_count = 0, g_last_index_format = 0;
 bool g_in_program_flush = false;
@@ -531,14 +533,21 @@ GuestShaderCode VertexShaderCode(const uint8_t* base, uint32_t dev) {
 }
 
 // Pixel shader: ucode = PS[+0x18] + blk[+40], size blk[+44], blk = PS + PS[+0x40].
+// With a null D3D pixel shader nothing is loaded, so in color + depth mode the
+// GPU still runs the previous one (the SDK backends use the active shader).
 GuestShaderCode PixelShaderCode(const uint8_t* base, uint32_t dev) {
+  if (g_regs && g_regs->Get<rex::graphics::reg::RB_MODECONTROL>().edram_mode !=
+                    rex::graphics::xenos::EdramMode::kColorDepth) {
+    return {};
+  }
   uint32_t ps = Load32(base, dev + kDevPixelShader);
-  if (!Plausible(ps)) return {};
+  if (!Plausible(ps)) return g_last_ps;
   uint32_t blk = ps + Load32(base, ps + 0x40);
   uint32_t ucode = Load32(base, ps + 0x18) + Load32(base, blk + 40);
   uint32_t size = Load32(base, blk + 44);
   if (!Plausible(ucode) || !size || size > 0x10000) return {};
-  return {reinterpret_cast<const uint32_t*>(GuestPtr(base, ucode)), size / 4};
+  g_last_ps = {reinterpret_cast<const uint32_t*>(GuestPtr(base, ucode)), size / 4};
+  return g_last_ps;
 }
 
 // The draw packet ends the command-buffer range the D3D call wrote (dev+48 =
@@ -717,6 +726,7 @@ void StopDanteDevice() {
   g_depth_copy = {};
   g_front_views.clear();
   g_loaded_vs = {};
+  g_last_ps = {};
   g_draws.reset();
   g_texture_cache.reset();
   g_shaders.reset();

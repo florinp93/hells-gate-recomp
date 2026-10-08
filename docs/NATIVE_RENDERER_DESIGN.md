@@ -307,12 +307,11 @@ What it took beyond the plan above:
 - Render state: cull (front face clockwise if `face`), depth bias, primitive
   reset for strips only.
 
-Known issue (first M5 item): part of Dante's model (between the legs, the
-dark speckled look from behind) still differs from Xenos and from the SDK
-Vulkan backend (`tools/native_run.bat`, renderer=native). Verified identical
-between renderer=dante and the SDK Vulkan backend: registers, shaders (SPIR-V
-bodies), constant buffers, index buffers, vertex data, textures. Details in
-the progress log.
+Fixed in M5: Dante's model (stretched texture between the legs, speckled
+back) came from 16-bit index buffers read from a 4-byte aligned address; draws
+whose indices start 2 bytes past that read one extra index and every triangle
+shifted by a vertex. Found by comparing the post-VS vertex order of the draw
+in RenderDoc captures of renderer=xenos (D3D12) and renderer=dante.
 
 #### Risks
 

@@ -35,6 +35,13 @@ if (Test-Path $applySdkPatches) {
     if ($LASTEXITCODE -ne 0) { throw "SDK patch application failed" }
 }
 
+$applyDiligentPatches = Join-Path $root "patches\apply_diligent_patches.ps1"
+if ((Test-Path (Join-Path $root "thirdparty\diligent-core")) -and (Test-Path $applyDiligentPatches)) {
+    Write-Host "Applying local DiligentCore patches ..."
+    & $applyDiligentPatches
+    if ($LASTEXITCODE -ne 0) { throw "DiligentCore patch application failed" }
+}
+
 Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
 Write-Host "Next steps:"
