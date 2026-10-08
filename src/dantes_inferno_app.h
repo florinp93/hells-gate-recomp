@@ -14,6 +14,7 @@
 #include <rex/system/xam/content_manager.h>
 #include <rex/logging/macros.h>
 
+#include "native_renderer/dante_device.h"
 #include "native_renderer/dante_graphics_system.h"
 
 #include <array>
@@ -254,6 +255,10 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    dante::ApplyDanteRendererConfig();
+    if (rex::cvar::Query<std::string>("renderer") == "dante") {
+      native::StartDanteDevice(window());
+    }
     rex::chrono::Clock::set_guest_time_scalar(REXCVAR_GET(time_scalar));
 
     rex::cvar::RegisterChangeCallback("time_scalar",
@@ -302,6 +307,20 @@ class DantesInfernoApp : public rex::ReXApp {
                           "Trace D3D API calls for 3 frames", [this] {
       bool ok = rex::cvar::SetFlagByName("d3d_trace_frames", "3");
       REXLOG_INFO("D3D-TRACE trigger: set={}", ok);
+    });
+
+    rex::ui::RegisterBind("bind_host_rendering", "F10",
+                          "Toggle Xenos host rendering (sync keeps running)", [this] {
+      bool enable = !rex::cvar::Query<bool>("gpu_host_rendering");
+      bool ok = rex::cvar::SetFlagByName("gpu_host_rendering", enable ? "true" : "false");
+      REXLOG_INFO("gpu_host_rendering={} (set={})", enable, ok);
+    });
+
+    rex::ui::RegisterBind("bind_dante_debug_view", "F11",
+                          "renderer=dante: cycle the presented render target", [this] {
+      int32_t view = (rex::cvar::Query<int32_t>("dante_debug_view") + 1) % 9;
+      rex::cvar::SetFlagByName("dante_debug_view", std::to_string(view));
+      REXLOG_INFO("dante_debug_view={}", view);
     });
 
     rex::ui::RegisterBind("bind_native_observe", "F9",
@@ -429,10 +448,13 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    native::StopDanteDevice();
     rex::ui::UnregisterBind("bind_fast_forward");
     rex::ui::UnregisterBind("bind_pass_trace");
     rex::ui::UnregisterBind("bind_d3d_trace");
     rex::ui::UnregisterBind("bind_native_observe");
+    rex::ui::UnregisterBind("bind_host_rendering");
+    rex::ui::UnregisterBind("bind_dante_debug_view");
     rex::ui::UnregisterBind("bind_fps_overlay");
     rex::ui::UnregisterBind("bind_exit_game");
     rex::cvar::UnregisterChangeCallbacks("time_scalar");

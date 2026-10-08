@@ -39,6 +39,7 @@ set(DANTESINFERNO_SOURCES
     # D3D hooks: strong overrides of the generated weak aliases, so in the exe.
     src/native_renderer/d3d_trace.cpp
     src/native_renderer/native_observer.cpp
+    src/native_renderer/gpu_state.cpp
 )
 
 if(WIN32)
@@ -92,6 +93,11 @@ if(DANTESINFERNO_NATIVE_RENDERER)
     add_subdirectory("${DILIGENT_CORE_DIR}" "${CMAKE_BINARY_DIR}/diligent-core" EXCLUDE_FROM_ALL)
 
     add_library(dante_native_renderer STATIC
+        src/native_renderer/dante_device.cpp
+        src/native_renderer/dante_draws.cpp
+        src/native_renderer/dante_dump.cpp
+        src/native_renderer/dante_shaders.cpp
+        src/native_renderer/dante_textures.cpp
         src/native_renderer/dante_graphics_system.cpp
         src/native_renderer/native_device.cpp
         src/native_renderer/native_renderer_integration.cpp
@@ -195,8 +201,10 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         target_include_directories(dante_native_renderer PRIVATE
             ${REXSDK_DIR}/thirdparty/glslang
             ${REXSDK_DIR}/thirdparty/glslang/StandAlone
+            ${REXSDK_DIR}/thirdparty/renderdoc
         )
         target_link_libraries(dante_native_renderer PRIVATE
+            xxHash::xxhash
             glslang::SPIRV
             glslang
             MachineIndependent
@@ -226,6 +234,7 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         src/native_renderer/dantes_inferno_native_main.cpp
         src/native_renderer/d3d_trace.cpp
         src/native_renderer/native_observer.cpp
+        src/native_renderer/gpu_state.cpp
     )
     if(WIN32)
         list(APPEND DANTESINFERNO_NATIVE_SOURCES src/dantes_inferno.rc)

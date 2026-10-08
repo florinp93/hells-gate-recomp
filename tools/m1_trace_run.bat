@@ -22,7 +22,7 @@ copy /y "thirdparty\rexglue-sdk\out\win-amd64\rexgpu-xenos.dll" "%PLUGIN_DST%" >
 if errorlevel 1 goto :fail
 echo [m1] BUILD OK >> "%LOG%"
 echo Launching game ...
-start "" /D "%CD%" "%CD%\out\build\win-amd64-release\dantes_inferno.exe" --game_data_root=game --vfetch_oob_trace=false
+start "" /D "%CD%" "%CD%\out\build\win-amd64-release\dantes_inferno.exe" --game_data_root=game --vfetch_oob_trace=false %*
 echo [m1] launched %TIME% >> "%LOG%"
 exit /b 0
 

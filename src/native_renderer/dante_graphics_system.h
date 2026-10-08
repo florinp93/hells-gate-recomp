@@ -53,4 +53,9 @@ std::unique_ptr<rex::system::IGraphicsSystem> CreateConfiguredGraphicsSystem(
 // graphics backend since it only adjusts the shared cvar.
 void ApplyRenderScaleConfig();
 
+// renderer=dante: the Xenos command processor only keeps the game's sync
+// (fences, interrupts, swaps); rendering is native. Call after the GPU plugin
+// is loaded (its cvars register on load).
+void ApplyDanteRendererConfig();
+
 }  // namespace dante

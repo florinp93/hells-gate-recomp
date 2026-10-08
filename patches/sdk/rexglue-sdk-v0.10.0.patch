@@ -1145,7 +1145,7 @@ index 163c257..c01e0e3 100644
  }
  
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..593b87d 100644
+index a744375..f6314ab 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
 @@ -10,10 +10,12 @@
@@ -1169,7 +1169,7 @@ index a744375..593b87d 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/sampler_info.h>
  #include <rex/graphics/xenos.h>
-@@ -32,11 +35,47 @@
+@@ -32,11 +35,59 @@
  #include <rex/memory.h>
  #include <rex/memory/ring_buffer.h>
  #include <rex/stream.h>
@@ -1179,6 +1179,12 @@ index a744375..593b87d 100644
  
  REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
  
++REXCVAR_DEFINE_BOOL(gpu_host_rendering, true, "GPU",
++                    "Issue guest draws (including clears and resolves) to the host GPU. "
++                    "false: only execute the command stream's register, memory, fence and "
++                    "interrupt side effects (used when the host renders natively)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
 +// Diagnostic draw observer registered by the host executable. Called on the
 +// command processor thread after each draw; packet_end (guest physical, just
 +// past the draw packet) identifies the draw, usage is null if not analyzed.
@@ -1191,6 +1197,12 @@ index a744375..593b87d 100644
 +  uint64_t ps_float[4];
 +  uint32_t vertex_fetch[3];  // vertex fetch constants 0-95 read by the VS
 +  uint32_t texture_fetch;    // fetch constants 0-31 sampled as textures
++  uint32_t memexport;        // bit 0: VS, bit 1: PS write memory (memexport)
++  uint64_t vs_ucode_hash;    // active shaders (0 if none), also without host rendering
++  uint64_t ps_ucode_hash;
++  uint32_t index_base;       // indexed draws: guest physical index buffer, else 0
++  uint32_t index_count;
++  uint32_t index_format;     // 0 = 16-bit, 1 = 32-bit
 +};
 +using RexGpuDrawObserverFn = void (*)(void* user, const uint32_t* registers,
 +                                      uint32_t register_count, uint32_t draw_initiator,
@@ -1217,7 +1229,7 @@ index a744375..593b87d 100644
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
                      "Disable for minor CPU overhead reduction, but may break memory coherency.")
-@@ -958,9 +997,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+@@ -958,9 +1009,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
    uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
    reader->AdvanceRead((count - 4) * sizeof(uint32_t));
  
@@ -1246,7 +1258,7 @@ index a744375..593b87d 100644
    return true;
  }
  
-@@ -1206,7 +1264,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+@@ -1206,7 +1276,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
    uint32_t data_value;
    if ((initiator >> 31) & 0x1) {
      // Write counter (GPU vblank counter?).
@@ -1255,7 +1267,7 @@ index a744375..593b87d 100644
    } else {
      // Write value.
      data_value = value;
-@@ -1282,6 +1340,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+@@ -1282,6 +1352,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
    return true;
  }
  
@@ -1340,17 +1352,19 @@ index a744375..593b87d 100644
  bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32_t packet,
                                                const char* opcode_name, uint32_t viz_query_condition,
                                                uint32_t count_remaining) {
-@@ -1368,6 +1504,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1368,7 +1516,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // we don't support yet.
    reader->AdvanceRead(count_remaining * sizeof(uint32_t));
  
+-  if (draw_succeeded) {
 +  uint32_t observer_packet_end =
 +      uint32_t(reader->read_ptr() - uintptr_t(memory_->TranslatePhysical(0)));
 +
-   if (draw_succeeded) {
++  if (draw_succeeded && REXCVAR_GET(gpu_host_rendering)) {
      auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
      if (!(viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z)) {
-@@ -1378,6 +1517,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+       // TODO(Triang3l): Don't drop the draw call completely if the vertex
+@@ -1378,6 +1529,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
  
        bool major_mode_explicit =
            xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
@@ -1360,7 +1374,7 @@ index a744375..593b87d 100644
        draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                                   is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
        if (!draw_succeeded) {
-@@ -1400,6 +1542,36 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1400,6 +1554,53 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // for instance, features not supported by the host), don't terminate command
    // buffer processing as that would leave rendering in a way more inconsistent
    // state than just a single dropped draw command.
@@ -1368,6 +1382,21 @@ index a744375..593b87d 100644
 +    RexGpuDrawUsage usage = {};
 +    usage.struct_size = sizeof(usage);
 +    const RexGpuDrawUsage* usage_ptr = nullptr;
++    // Without host rendering nothing else analyzes the shaders.
++    for (Shader* shader : {static_cast<Shader*>(active_vertex_shader_),
++                           static_cast<Shader*>(active_pixel_shader_)}) {
++      if (shader && !shader->is_ucode_analyzed()) {
++        string::StringBuffer disasm_buffer;
++        shader->AnalyzeUcode(disasm_buffer);
++      }
++    }
++    usage.vs_ucode_hash = active_vertex_shader_ ? active_vertex_shader_->ucode_data_hash() : 0;
++    usage.ps_ucode_hash = active_pixel_shader_ ? active_pixel_shader_->ucode_data_hash() : 0;
++    if (is_indexed) {
++      usage.index_base = index_buffer_info.guest_base;
++      usage.index_count = index_buffer_info.count;
++      usage.index_format = uint32_t(index_buffer_info.format);
++    }
 +    if (active_vertex_shader_ && active_vertex_shader_->is_ucode_analyzed() &&
 +        (!active_pixel_shader_ || active_pixel_shader_->is_ucode_analyzed())) {
 +      usage.vs_float_base = register_file_->values[XE_GPU_REG_SQ_VS_CONST] & 0x1FF;
@@ -1376,6 +1405,7 @@ index a744375..593b87d 100644
 +      std::memcpy(usage.vs_float, vs_map.float_bitmap, sizeof(usage.vs_float));
 +      std::memcpy(usage.vertex_fetch, vs_map.vertex_fetch_bitmap, sizeof(usage.vertex_fetch));
 +      usage.float_dynamic |= vs_map.float_dynamic_addressing ? 1u : 0u;
++      usage.memexport |= active_vertex_shader_->memexport_eM_written() ? 1u : 0u;
 +      for (const auto& binding : active_vertex_shader_->texture_bindings()) {
 +        usage.texture_fetch |= 1u << (binding.fetch_constant & 31);
 +      }
@@ -1383,6 +1413,7 @@ index a744375..593b87d 100644
 +        const auto& ps_map = active_pixel_shader_->constant_register_map();
 +        std::memcpy(usage.ps_float, ps_map.float_bitmap, sizeof(usage.ps_float));
 +        usage.float_dynamic |= ps_map.float_dynamic_addressing ? 2u : 0u;
++        usage.memexport |= active_pixel_shader_->memexport_eM_written() ? 2u : 0u;
 +        for (const auto& binding : active_pixel_shader_->texture_bindings()) {
 +          usage.texture_fetch |= 1u << (binding.fetch_constant & 31);
 +        }
@@ -1397,7 +1428,7 @@ index a744375..593b87d 100644
    return true;
  }
  
-@@ -1611,4 +1783,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
+@@ -1611,4 +1812,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
    return true;
  }
  

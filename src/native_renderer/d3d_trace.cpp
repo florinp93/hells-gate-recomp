@@ -8,9 +8,12 @@
 #include <rex/logging/macros.h>
 #include <rex/ppc/context.h>
 
+#include "dante_device.h"
+#include "gpu_state.h"
 #include "native_observer.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -159,6 +162,42 @@ void TraceFrameBoundary() {
   g_tracing.store(now_tracing, std::memory_order_relaxed);
 }
 
+// Logs the guest frame rate every 5 s (pacing check for renderer changes).
+void FrameHeartbeat() {
+  static const bool enabled = rex::cvar::Query<std::string>("renderer") == "dante";
+  if (!enabled) return;
+  using Clock = std::chrono::steady_clock;
+  static Clock::time_point window_start = Clock::now();
+  static uint32_t frames = 0;
+  ++frames;
+  double seconds = std::chrono::duration<double>(Clock::now() - window_start).count();
+  if (seconds < 5.0) return;
+  REXLOG_INFO("FRAME-HB fps={:.1f} host_rendering={}", frames / seconds,
+              rex::cvar::Query<bool>("gpu_host_rendering"));
+  frames = 0;
+  window_start = Clock::now();
+}
+
+// Draw calls nested in another hooked draw (BeginVertices inside DrawVerticesUP).
+thread_local int g_draw_depth = 0;
+
+inline native::CallArgs CaptureArgs(const PPCContext& ctx) {
+  native::CallArgs args;
+  for (int i = 0; i < 8; ++i) args.r[i] = ArgReg(ctx, 3 + i);
+  args.f1 = ctx.f1.f64;
+  return args;
+}
+
+inline void AfterBeginVertices(const native::CallArgs& args, const PPCContext& ctx) {
+  native::ObserveBeginVerticesReturned(ctx);
+  native::DanteOnBeginVertices(args, ctx.r3.u32);
+}
+
+inline void AfterEndVertices(const uint8_t* base) {
+  native::ObserveEndVertices(base);
+  native::DanteOnEndVertices(base);
+}
+
 }  // namespace
 
 #define D3D_TRACE_HOOK_EX(addr, label, max_logged, skip_null_reg, dump_reg, dump_dwords) \
@@ -175,6 +214,21 @@ void TraceFrameBoundary() {
 
 #define D3D_TRACE_HOOK(addr, label) D3D_TRACE_HOOK_EX(addr, label, 6, 0, 0, 0)
 
+// Traced hook whose arguments are handed to a renderer=dante handler after the original.
+#define D3D_NATIVE_HOOK(addr, label, max_logged, dump_reg, dump_dwords, handler)    \
+  REX_EXTERN(__imp__sub_##addr);                                                    \
+  static TraceSlot g_slot_##addr{label, 0x##addr, max_logged, 0, dump_reg, dump_dwords}; \
+  static SlotRegistrar g_reg_##addr{&g_slot_##addr};                                \
+  REX_HOOK_RAW(sub_##addr) {                                                        \
+    SavedArgs saved;                                                                \
+    bool log = TraceEnter(g_slot_##addr, ctx, base, saved);                         \
+    native::CallArgs args = CaptureArgs(ctx);                                       \
+    args.ring_before = native::DanteRingWritePtr(ctx.r3.u32, base);                 \
+    __imp__sub_##addr(ctx, base);                                                   \
+    handler(args, base);                                                            \
+    if (log) TraceExit(g_slot_##addr, ctx, saved);                                  \
+  }
+
 // Draw hooks also feed the M2 observer (native_observer.cpp).
 #define D3D_DRAW_HOOK_AFTER(addr, label, kind, after)                               \
   REX_EXTERN(__imp__sub_##addr);                                                    \
@@ -183,8 +237,16 @@ void TraceFrameBoundary() {
   REX_HOOK_RAW(sub_##addr) {                                                        \
     SavedArgs saved;                                                                \
     bool log = TraceEnter(g_slot_##addr, ctx, base, saved);                         \
+    native::gpu::TrackDrawFlush(ctx.r3.u32, base);                                  \
+    if (g_draw_depth == 0) native::DanteOnDraw(ctx.r3.u32, base);                   \
     uint32_t ticket = native::ObserveDrawBegin(native::DrawKind::kind, ctx, base);  \
+    native::CallArgs draw_args = CaptureArgs(ctx);                                  \
+    ++g_draw_depth;                                                                 \
     __imp__sub_##addr(ctx, base);                                                   \
+    --g_draw_depth;                                                                 \
+    if (g_draw_depth == 0) {                                                        \
+      native::DanteOnDrawSubmitted(draw_args, int(native::DrawKind::kind), base);  \
+    }                                                                               \
     native::ObserveDrawEnd(ticket, ctx, base);                                      \
     after;                                                                          \
     if (log) TraceExit(g_slot_##addr, ctx, saved);                                  \
@@ -219,17 +281,17 @@ void TraceFrameBoundary() {
 D3D_DRAW_HOOK(8291D328, "DrawIndexedVertices", kIndexed)
 D3D_DRAW_HOOK(8291CF38, "DrawVertices", kAuto)
 // BeginVertices..EndVertices is one draw; DrawVerticesUP inlines the End.
-D3D_DRAW_HOOK_AFTER(8291CA58, "BeginVertices", kInline, native::ObserveBeginVerticesReturned(ctx))
-D3D_TRACE_HOOK_AFTER(8291CA48, "EndVertices", native::ObserveEndVertices(base))
+D3D_DRAW_HOOK_AFTER(8291CA58, "BeginVertices", kInline, AfterBeginVertices(draw_args, ctx))
+D3D_TRACE_HOOK_AFTER(8291CA48, "EndVertices", AfterEndVertices(base))
 D3D_DRAW_HOOK(8291CEF0, "DrawVerticesUP", kInlineUP)
 
 D3D_TRACE_HOOK(827E7B10, "SetVertexShaderConstantF")
 D3D_TRACE_HOOK(827E7BE8, "SetPixelShaderConstantF")
 D3D_TRACE_HOOK_BEFORE(8291D778, "LoadShaderConstantsFromBuffer",
-                      native::ObserveConstantBufferLoad(ctx, base))
+                      native::gpu::TrackConstantBufferLoad(ctx, base))
 
-D3D_TRACE_HOOK(827EDC18, "Clear")
-D3D_TRACE_HOOK_EX(827E5B18, "Resolve", 6, 0, 6, 16)  // r6 = dest texture
+D3D_NATIVE_HOOK(827EDC18, "Clear", 6, 0, 0, native::DanteOnClear)
+D3D_NATIVE_HOOK(827E5B18, "Resolve", 6, 6, 16, native::DanteOnResolve)  // r6 = dest texture
 D3D_TRACE_HOOK(827DCF68, "EndTiling")
 D3D_TRACE_HOOK(827DCBF8, "BeginTiling")
 D3D_TRACE_HOOK(827DCA88, "SetPredication")
@@ -263,6 +325,27 @@ D3D_TRACE_HOOK_EX(827DAA98, "Query_Issue", 6, 0, 3, 16)
 D3D_TRACE_HOOK(827E2FC0, "CreateDevice?")
 D3D_TRACE_HOOK(827D4AB0, "unk_4AB0(pre-Swap)")
 
+// Program flush: tracks the vertex shader microcode the GPU will run.
+REX_EXTERN(__imp__sub_827EA4A0);
+REX_HOOK_RAW(sub_827EA4A0) {
+  uint32_t dev = ctx.r3.u32;
+  native::DanteOnProgramFlushBegin(dev, base);
+  __imp__sub_827EA4A0(ctx, base);
+  native::DanteOnProgramFlushEnd(dev, base);
+}
+
+// Command buffer reservation (may start a new segment); returns the write pointer.
+REX_EXTERN(__imp__sub_827D3F10);
+REX_HOOK_RAW(sub_827D3F10) {
+  __imp__sub_827D3F10(ctx, base);
+  native::DanteOnCommandReserve(ctx.r3.u32);
+}
+REX_EXTERN(__imp__sub_827D4148);
+REX_HOOK_RAW(sub_827D4148) {
+  __imp__sub_827D4148(ctx, base);
+  if (ctx.r3.u32) native::DanteOnCommandReserve(ctx.r3.u32);
+}
+
 // Swap ends the frame for both the trace and the observer.
 REX_EXTERN(__imp__sub_827D4EE0);
 static TraceSlot g_slot_827D4EE0{"Swap", 0x827D4EE0, 6, 0, 4, 16};
@@ -270,8 +353,11 @@ static SlotRegistrar g_reg_827D4EE0{&g_slot_827D4EE0};
 REX_HOOK_RAW(sub_827D4EE0) {
   SavedArgs saved;
   bool log = TraceEnter(g_slot_827D4EE0, ctx, base, saved);
+  native::CallArgs args = CaptureArgs(ctx);
   __imp__sub_827D4EE0(ctx, base);
   if (log) TraceExit(g_slot_827D4EE0, ctx, saved);
   TraceFrameBoundary();
   native::ObserveFrameBoundary();
+  native::DanteOnSwap(args, base, g_tracing.load(std::memory_order_relaxed));
+  FrameHeartbeat();
 }

@@ -3,6 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace Diligent {
+struct IRenderDevice;
+struct IDeviceContext;
+struct ITextureView;
+struct IShader;
+}  // namespace Diligent
+
 namespace dante {
 
 struct NativeBuffer;
@@ -141,6 +148,15 @@ class NativeDevice {
                           int32_t adapter_luid_high = 0);
 
   void setDisplayAspect(double aspect, bool letterbox);
+
+  // Blits a shader-resource view to the swapchain (letterboxed) and presents.
+  bool presentTexture(Diligent::ITextureView* srv, uint32_t sync_interval = 1);
+
+  // GLSL (Vulkan) -> SPIR-V -> shader; the caller owns the returned reference.
+  Diligent::IShader* createGlslShader(const char* source, bool pixel, const char* name);
+
+  Diligent::IRenderDevice* renderDevice() const;
+  Diligent::IDeviceContext* immediateContext() const;
 
   bool updateWindowSize();
 

@@ -16,7 +16,8 @@ REXCVAR_DEFINE_STRING(renderer, "xenos", "Graphics",
                       "Graphics system: 'xenos' loads the rexgpu-xenos plugin "
                       "(default), 'native' uses the in-process Vulkan xenos "
                       "backend, 'wrapped' forwards to the plugin through "
-                      "DanteGraphicsSystem");
+                      "DanteGraphicsSystem, 'dante' renders natively and keeps "
+                      "the plugin for sync only (work in progress)");
 
 REXCVAR_DEFINE_STRING(native_render_scale, "off", "Graphics",
                       "Guest draw resolution scale, applied via the SDK "
@@ -89,7 +90,7 @@ void DanteGraphicsSystem::Shutdown() {
 std::unique_ptr<rex::system::IGraphicsSystem> CreateConfiguredGraphicsSystem(
     const std::string& gpu_plugin) {
   const std::string renderer = rex::cvar::Query<std::string>("renderer");
-  if (renderer == "xenos" || renderer == "rexglue") {
+  if (renderer == "xenos" || renderer == "rexglue" || renderer == "dante") {
     return nullptr;
   }
   if (renderer == "native") {
@@ -119,6 +120,18 @@ std::unique_ptr<rex::system::IGraphicsSystem> CreateConfiguredGraphicsSystem(
   }
   REXLOG_WARN("Unknown renderer='{}'; using default xenos plugin", renderer);
   return nullptr;
+}
+
+void ApplyDanteRendererConfig() {
+  if (rex::cvar::Query<std::string>("renderer") != "dante") {
+    return;
+  }
+  bool host_off = rex::cvar::SetFlagByName("gpu_host_rendering", "false");
+  // Without host draws there are no real sample counts; the CP then writes
+  // query_occlusion_fake_sample_count ("visible").
+  bool queries_off = rex::cvar::SetFlagByName("occlusion_query_enable", "false");
+  REXLOG_INFO("renderer=dante: gpu_host_rendering=false ({}), occlusion_query_enable=false ({})",
+              host_off ? "ok" : "FAILED", queries_off ? "ok" : "FAILED");
 }
 
 void ApplyRenderScaleConfig() {

@@ -259,7 +259,11 @@ gameplay 948/948, pause 690/690 draws identical to the Xenos register file):
    (`0x827EA218`, called for VS with `blk = VS+872`, base `VS[+0x20]`; for PS
    with `blk = PS+40`, base `PS[+0x18]`): records `{u16 vec4, u16 dwords,
    u32 data offset}` at `blk + [blk+20] + 20`, terminated by `dwords == 0`,
-   loaded with `LOAD_ALU_CONSTANT` from `base + data offset`.
+   loaded with `LOAD_ALU_CONSTANT` from `base + data offset`. Literals do not
+   update the shadow, so they **persist in the GPU registers** until a
+   dirty-group flush or a buffer load overwrites that vec4; later shaders read
+   them (e.g. VS c245-c247 set by an earlier shader, read by the character
+   skinning VS). `gpu_state` keeps this stale-literal state.
 5. **Inline draws**: `BeginVertices`..`EndVertices` is one draw and its packet
    is written at `EndVertices` (`DrawVerticesUP` calls `BeginVertices` and
    inlines the end). Stream 0 = vertex fetch constant 95 (`0x48BE`) points at
@@ -268,6 +272,30 @@ gameplay 948/948, pause 690/690 draws identical to the Xenos register file):
 Draws issued internally by D3D (clears, resolves; prim 8 = RECTLIST, 3
 vertices, `RB_MODECONTROL` 4/5/6) have no game draw call and are expected to
 leave stale state the game's shaders do not read.
+
+### Vertex shader microcode actually loaded
+
+D3D patches the vertex fetch instructions of a VS **per vertex declaration**
+(format, offset, stride from `dev+12704`). The program flush (`0x827EA4A0`)
+binds a variant with `0x827EA360`: if variant v's record (`VS + 416*v`) has
+the declaration id at `+40` and matching stream masks, it is reused;
+otherwise it is re-patched in place by `0x827E97C8`, unless the GPU still
+uses it (fence at `+64`), in which case `0x827EA0C8` copies the ucode into the
+ring as `IM_LOAD_IMMEDIATE` and patches the copy. The GPU runs the **last
+vertex `IM_LOAD` / `IM_LOAD_IMMEDIATE` the flush writes**; renderer=dante
+scans the flush's packets for it (segment switches via `0x827D3F10` /
+`0x827D4148` restart the scan). Reading the in-memory variant instead yields
+the wrong vertex layout for busy variants (stretched geometry).
+
+### Resolve details
+
+- `RB_COPY_DEST_INFO.copy_dest_swap` (bit 24) swaps red/blue on the copy; the
+  game sets it for its 8888 resolves (front buffers are BGR, fetch swizzle
+  ZYX1). Resolve writes the copy registers, then resets them to 0, so the
+  value in effect is the last non-zero write in the Resolve's packets.
+- Polygon offset: `PA_SU_SC_MODE_CNTL.poly_offset_*` with
+  `PA_SU_POLY_OFFSET_*` is applied as host depth bias exactly like the SDK
+  Vulkan host-RT path (`draw_util::GetPreferredFacePolygonOffset`).
 
 ## Frame shape (from `gpu_pass_trace_frames`, log 313, in-game)
 
@@ -312,10 +340,12 @@ Findings:
 ## Open questions
 
 1. `0x827D4AB0` role (pre-Swap; restores the 1280×720 back buffer).
-2. How the VS variant index is chosen from the vertex declaration.
-3. Whether any game code writes PM4 directly or replays recorded command
-   buffers (static evidence says no: all `INDIRECT_BUFFER` use is internal).
+2. Whether any game code writes PM4 directly or replays recorded command
+   buffers (static evidence says no; the M2 observer's unmatched draws are the
+   previous frame still executing when a capture starts, plus D3D-internal
+   clears / resolves).
 
+Closed: VS variant choice (see "Vertex shader microcode actually loaded").
 Closed by the traces: argument order of `Clear`, `Resolve`, `BeginVertices`,
 the draw calls, `Swap`, `SetRenderTarget`, `SetTexture(sampler, pTex, dirtyBit)`;
 the fence and query APIs; texture / surface / buffer / PS object layouts.

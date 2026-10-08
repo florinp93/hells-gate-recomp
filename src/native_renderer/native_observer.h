@@ -25,9 +25,6 @@ void ObserveDrawEnd(uint32_t ticket, const PPCContext& ctx, const uint8_t* base)
 void ObserveBeginVerticesReturned(const PPCContext& ctx);
 void ObserveEndVertices(const uint8_t* base);
 
-// 0x8291D778: float constants loaded from an engine buffer. Call before it.
-void ObserveConstantBufferLoad(const PPCContext& ctx, const uint8_t* base);
-
 void ObserveFrameBoundary();
 
 }  // namespace native

@@ -545,6 +545,41 @@ bool NativeDevice::presentImage(uint32_t width, uint32_t height,
   return true;
 }
 
+bool NativeDevice::presentTexture(Diligent::ITextureView* srv, uint32_t sync_interval) {
+  if (!impl_->initialized || !srv) return false;
+  Diligent::IShaderResourceBinding* srb = nullptr;
+  impl_->blit_pipeline->CreateShaderResourceBinding(&srb, true);
+  if (!srb) return false;
+  if (auto* var = srb->GetVariableByName(Diligent::SHADER_TYPE_PIXEL, "g_Texture")) {
+    var->Set(srv);
+  }
+  auto* rtv = impl_->swapchain->GetCurrentBackBufferRTV();
+  auto* dsv = impl_->swapchain->GetDepthBufferDSV();
+  impl_->context->SetRenderTargets(1, &rtv, dsv,
+                                   Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  const float clear_color[] = {0.0f, 0.0f, 0.0f, 1.0f};
+  impl_->context->ClearRenderTarget(rtv, clear_color,
+                                    Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  impl_->setBlitViewport();
+  impl_->context->SetPipelineState(impl_->blit_pipeline);
+  impl_->context->CommitShaderResources(srb, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  Diligent::DrawAttribs da;
+  da.NumVertices = 3;
+  impl_->context->Draw(da);
+  srb->Release();
+  impl_->swapchain->Present(sync_interval);
+  return true;
+}
+
+Diligent::IShader* NativeDevice::createGlslShader(const char* source, bool pixel,
+                                                  const char* name) {
+  return createShader(impl_->device, source,
+                      pixel ? Diligent::SHADER_TYPE_PIXEL : Diligent::SHADER_TYPE_VERTEX, name);
+}
+
+Diligent::IRenderDevice* NativeDevice::renderDevice() const { return impl_->device; }
+Diligent::IDeviceContext* NativeDevice::immediateContext() const { return impl_->context; }
+
 void NativeDevice::setDisplayAspect(double aspect, bool letterbox) {
   if (!impl_->initialized) return;
   impl_->display_aspect = aspect;
