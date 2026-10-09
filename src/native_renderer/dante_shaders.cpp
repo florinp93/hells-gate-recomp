@@ -124,7 +124,13 @@ struct GuestShader {
 
 struct ShaderCache::Impl {
   dl::IRenderDevice* device;
-  rg::SpirvShaderTranslator translator{TranslatorFeatures(), false, false, false};
+  Impl(float scale_x, float scale_y) : translator(TranslatorFeatures(), false, false, false) {
+    if (scale_x != 1.0f || scale_y != 1.0f) {
+      translator.SetFractionalDrawResolutionScale(scale_x, scale_y);
+    }
+  }
+
+  rg::SpirvShaderTranslator translator;
   rex::string::StringBuffer disasm_buffer;
   std::unordered_map<uint64_t, GuestShader> shaders;  // by ucode hash
   uint32_t translated = 0;
@@ -180,7 +186,8 @@ struct ShaderCache::Impl {
   }
 };
 
-ShaderCache::ShaderCache(dl::IRenderDevice* device) : impl_(std::make_unique<Impl>()) {
+ShaderCache::ShaderCache(dl::IRenderDevice* device, float scale_x, float scale_y)
+    : impl_(std::make_unique<Impl>(scale_x, scale_y)) {
   impl_->device = device;
 }
 

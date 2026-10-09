@@ -4706,10 +4706,42 @@ index 23645ef..110e310 100644
      // make the latency even worse.
      swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
-index 9ce3bb4..4e5a690 100644
+index 9ce3bb4..0a34854 100644
 --- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
 +++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
-@@ -2030,10 +2030,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+@@ -974,8 +974,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+       coordinates[coordinate_component_index] = coordinates_operand;
+     }
+     spv::Id texture_resolution_scaled = spv::NoResult;
+-    uint32_t revert_resolution_scale_axes =
+-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++    uint32_t revert_resolution_scale_axes = uint32_t(DrawResolutionScaleX() != 1.0f) |
++                                            (uint32_t(DrawResolutionScaleY() != 1.0f) << 1);
+     spv::Id const_texture_resolution_scale[] = {spv::NoResult, spv::NoResult};
+     spv::Id const_texture_resolution_scale_reciprocal[] = {spv::NoResult, spv::NoResult};
+     if (revert_resolution_scale_axes) {
+@@ -991,16 +991,14 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+                                 builder_->makeUintConstant(UINT32_C(1) << fetch_constant_index)),
+           const_uint_0_);
+       if (revert_resolution_scale_axes & 0b001) {
+-        const_texture_resolution_scale[0] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_x_));
++        const_texture_resolution_scale[0] = builder_->makeFloatConstant(DrawResolutionScaleX());
+         const_texture_resolution_scale_reciprocal[0] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_));
++            builder_->makeFloatConstant(1.0f / DrawResolutionScaleX());
+       }
+       if (revert_resolution_scale_axes & 0b010) {
+-        const_texture_resolution_scale[1] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_y_));
++        const_texture_resolution_scale[1] = builder_->makeFloatConstant(DrawResolutionScaleY());
+         const_texture_resolution_scale_reciprocal[1] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_));
++            builder_->makeFloatConstant(1.0f / DrawResolutionScaleY());
+       }
+     }
+ 
+@@ -2030,10 +2028,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
          }
  
          // Apply the exponent bias from the bits 13:18 of the fetch constant
@@ -4734,3 +4766,74 @@ index 9ce3bb4..4e5a690 100644
                                    builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
          {
            uint32_t result_remaining_components = used_result_nonzero_components;
+diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
+index dce3dbf..e17753d 100644
+--- a/include/rex/graphics/pipeline/shader/spirv_translator.h
++++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
+@@ -411,6 +411,16 @@ class SpirvShaderTranslator : public ShaderTranslator {
+         draw_resolution_scale_x_(draw_resolution_scale_x ? draw_resolution_scale_x : 1),
+         draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1) {}
+ 
++  // Host render targets that are a non-integer multiple of the guest size
++  // (no EDRAM emulation): pixel positions and resolution-scaled texture fetches
++  // use these factors. Paths that need whole host pixels per guest pixel
++  // (memexport once per guest pixel, fragment shader interlock) keep the
++  // integer scale.
++  void SetFractionalDrawResolutionScale(float x, float y) {
++    draw_resolution_scale_x_fractional_ = x;
++    draw_resolution_scale_y_fractional_ = y;
++  }
++
+   uint64_t GetDefaultVertexShaderModification(
+       uint32_t dynamic_addressable_register_count,
+       Shader::HostVertexShaderType host_vertex_shader_type =
+@@ -758,6 +768,19 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   bool edram_fragment_shader_interlock_;
+   uint32_t draw_resolution_scale_x_;
+   uint32_t draw_resolution_scale_y_;
++  // Non-integer override (0 = use the integer scale), see
++  // SetFractionalDrawResolutionScale.
++  float draw_resolution_scale_x_fractional_ = 0.0f;
++  float draw_resolution_scale_y_fractional_ = 0.0f;
++
++  float DrawResolutionScaleX() const {
++    return draw_resolution_scale_x_fractional_ > 0.0f ? draw_resolution_scale_x_fractional_
++                                                      : float(draw_resolution_scale_x_);
++  }
++  float DrawResolutionScaleY() const {
++    return draw_resolution_scale_y_fractional_ > 0.0f ? draw_resolution_scale_y_fractional_
++                                                      : float(draw_resolution_scale_y_);
++  }
+ 
+   // Is currently writing the empty depth-only pixel shader, such as for depth
+   // and stencil testing with fragment shader interlock.
+diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
+index 1774f97..0f05a83 100644
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -3210,10 +3210,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    if (draw_resolution_scale_x_ > 1) {
++    if (DrawResolutionScaleX() != 1.0f) {
+       param_gen_x = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_x,
+-          builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_)));
++          builder_->makeFloatConstant(1.0f / DrawResolutionScaleX()));
+     }
+     param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_x);
+@@ -3246,10 +3246,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    if (draw_resolution_scale_y_ > 1) {
++    if (DrawResolutionScaleY() != 1.0f) {
+       param_gen_y = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_y,
+-          builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_)));
++          builder_->makeFloatConstant(1.0f / DrawResolutionScaleY()));
+     }
+     param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_y);

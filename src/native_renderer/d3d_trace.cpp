@@ -225,6 +225,7 @@ inline void AfterEndVertices(const uint8_t* base) {
     bool log = TraceEnter(g_slot_##addr, ctx, base, saved);                         \
     native::CallArgs args = CaptureArgs(ctx);                                       \
     args.ring_before = native::DanteRingWritePtr(ctx.r3.u32, base);                 \
+    args.kicks_before = native::DanteRingKickCount();                               \
     __imp__sub_##addr(ctx, base);                                                   \
     handler(args, base);                                                            \
     if (log) TraceExit(g_slot_##addr, ctx, saved);                                  \
@@ -338,7 +339,9 @@ REX_HOOK_RAW(sub_827EA4A0) {
 // Command buffer reservation (may start a new segment); returns the write pointer.
 REX_EXTERN(__imp__sub_827D3F10);
 REX_HOOK_RAW(sub_827D3F10) {
+  uint32_t old_ptr = native::DanteRingWritePtr(ctx.r3.u32, base);
   __imp__sub_827D3F10(ctx, base);
+  native::DanteOnRingKick(old_ptr, ctx.r3.u32);
   native::DanteOnCommandReserve(ctx.r3.u32);
 }
 REX_EXTERN(__imp__sub_827D4148);

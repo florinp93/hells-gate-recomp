@@ -30,8 +30,11 @@ struct DrawTargets {
   uint32_t color_count = 0;
   Diligent::ITextureView* depth = nullptr;
   uint32_t depth_format = 0;
+  // Guest size; the textures are round(size * scale) host pixels.
   uint32_t width = 0;
   uint32_t height = 0;
+  float scale_x = 1.0f;
+  float scale_y = 1.0f;
 };
 
 struct DrawShaders {

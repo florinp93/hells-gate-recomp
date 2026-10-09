@@ -17,6 +17,7 @@ struct CallArgs {
   uint32_t r[8];
   double f1;
   uint32_t ring_before = 0;  // command buffer write pointer before the call
+  uint32_t kicks_before = 0;  // DanteRingKickCount() before the call
 };
 
 // Command buffer write pointer of a device (dev+48), 0 if implausible.
@@ -45,6 +46,11 @@ void DanteOnProgramFlushEnd(uint32_t device, const uint8_t* base);
 // Command buffer space reserved inside a flush (new segment): the returned
 // write pointer.
 void DanteOnCommandReserve(uint32_t write_ptr);
+
+// Ring kick (0x827D3F10): the segment written up to old_ptr was submitted and
+// writing continues at new_ptr. Render thread.
+void DanteOnRingKick(uint32_t old_ptr, uint32_t new_ptr);
+uint32_t DanteRingKickCount();
 // Diagnostics (M2 observer): ucode hashes of the shaders the next draw uses.
 void DanteShaderHashes(uint32_t device, const uint8_t* base, uint64_t& vs, uint64_t& ps);
 // Diagnostics: index buffer of the last submitted draw (guest physical, 0 = not indexed).

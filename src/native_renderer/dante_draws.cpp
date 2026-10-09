@@ -643,18 +643,27 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   // VulkanCommandProcessor::UpdateSystemConstantValues).
   auto depth_control = rg::draw_util::GetNormalizedDepthControl(regs);
   rg::draw_util::ViewportInfo viewport;
+  const float scale_x = targets.scale_x, scale_y = targets.scale_y;
+  auto host_x = [&](uint32_t v) { return uint32_t(std::lround(double(v) * scale_x)); };
+  auto host_y = [&](uint32_t v) { return uint32_t(std::lround(double(v) * scale_y)); };
+  // Guest pixels, scaled below (the NDC transform does not depend on the scale).
   rg::draw_util::GetHostViewportInfo(regs, 1, 1, false, 16384, 16384, true, depth_control, false,
                                      true, shaders.pixel_info && shaders.pixel_info->writes_depth(),
                                      viewport);
+  for (uint32_t i = 0; i < 2; ++i) {
+    auto scale_axis = [&](uint32_t v) { return i ? host_y(v) : host_x(v); };
+    uint32_t end = scale_axis(viewport.xy_offset[i] + viewport.xy_extent[i]);
+    viewport.xy_offset[i] = scale_axis(viewport.xy_offset[i]);
+    viewport.xy_extent[i] = end - viewport.xy_offset[i];
+  }
   if (!viewport.xy_extent[0] || !viewport.xy_extent[1]) {
     ++m.skipped_viewport;
     return false;
   }
+  // Uploaded after the textures are bound (textures_resolution_scaled).
+  Translator::SystemConstants sc;
+  std::memset(&sc, 0, sizeof(sc));
   {
-    dl::MapHelper<Translator::SystemConstants> map(m.context, m.system_constants, dl::MAP_WRITE,
-                                                   dl::MAP_FLAG_DISCARD);
-    Translator::SystemConstants& sc = *map;
-    std::memset(&sc, 0, sizeof(sc));
     auto vte = regs.Get<reg::PA_CL_VTE_CNTL>();
     auto colorcontrol = regs.Get<reg::RB_COLORCONTROL>();
     uint32_t flags = 0;
@@ -700,8 +709,8 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
       sc.point_vertex_diameter_max = float(minmax.max_size) * (2.0f / 16.0f);
       sc.point_constant_diameter[0] = float(size.width) * (2.0f / 16.0f);
       sc.point_constant_diameter[1] = float(size.height) * (2.0f / 16.0f);
-      sc.point_screen_diameter_to_ndc_radius[0] = 1.0f / std::max(viewport.xy_extent[0], 1u);
-      sc.point_screen_diameter_to_ndc_radius[1] = 1.0f / std::max(viewport.xy_extent[1], 1u);
+      sc.point_screen_diameter_to_ndc_radius[0] = scale_x / std::max(viewport.xy_extent[0], 1u);
+      sc.point_screen_diameter_to_ndc_radius[1] = scale_y / std::max(viewport.xy_extent[1], 1u);
     }
     sc.vertex_base_index = int32_t(regs.values[rg::XE_GPU_REG_VGT_INDX_OFFSET]);
     sc.vertex_index_min = regs.values[rg::XE_GPU_REG_VGT_MIN_VTX_INDX];
@@ -781,7 +790,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
                         xenos::DepthRenderTargetFormat::kD24S8
                     ? rg::draw_util::kD3D10PolygonOffsetFactorUnorm24
                     : rg::draw_util::kD3D10PolygonOffsetFactorFloat24;
-    slope *= xenos::kPolygonOffsetScaleSubpixelUnit;
+    slope *= xenos::kPolygonOffsetScaleSubpixelUnit * std::max(scale_x, scale_y);
     key.depth_bias = int32_t(std::lround(constant));
     std::memcpy(&key.depth_bias_slope, &slope, sizeof(float));
   }
@@ -827,11 +836,19 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
                   t.fetch_constant, t.dimension, fetch[0], fetch[1], fetch[2], fetch[3], fetch[4],
                   fetch[5]);
     }
+    if (view && source == 'R' && (scale_x != 1.0f || scale_y != 1.0f)) {
+      sc.textures_resolution_scaled |= 1u << (t.fetch_constant & 31);
+    }
     t.variable->Set(view ? view : dummy->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
   }
   for (const SamplerVariable& s : pipeline->samplers) {
     const uint32_t* fetch = fetch_base + (s.fetch_constant & 31) * 6;
     s.variable->Set(m.textures->GetSampler(fetch, s.mag, s.min, s.mip, s.aniso));
+  }
+  {
+    dl::MapHelper<Translator::SystemConstants> map(m.context, m.system_constants, dl::MAP_WRITE,
+                                                   dl::MAP_FLAG_DISCARD);
+    *map = sc;
   }
 
   dl::ITextureView* rtvs[4] = {};
@@ -845,17 +862,18 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   vp.Height = float(viewport.xy_extent[1]);
   vp.MinDepth = viewport.z_min;
   vp.MaxDepth = viewport.z_max;
-  m.context->SetViewports(1, &vp, targets.width, targets.height);
+  const uint32_t host_width = host_x(targets.width), host_height = host_y(targets.height);
+  m.context->SetViewports(1, &vp, host_width, host_height);
   rg::draw_util::Scissor scissor;
   rg::draw_util::GetScissor(regs, scissor);
-  dl::Rect rect{int32_t(scissor.offset[0]), int32_t(scissor.offset[1]),
-                int32_t(std::min(scissor.offset[0] + scissor.extent[0], targets.width)),
-                int32_t(std::min(scissor.offset[1] + scissor.extent[1], targets.height))};
+  dl::Rect rect{int32_t(host_x(scissor.offset[0])), int32_t(host_y(scissor.offset[1])),
+                int32_t(std::min(host_x(scissor.offset[0] + scissor.extent[0]), host_width)),
+                int32_t(std::min(host_y(scissor.offset[1] + scissor.extent[1]), host_height))};
   if (rect.right <= rect.left || rect.bottom <= rect.top) {
     ++m.skipped_scissor;
     return false;
   }
-  m.context->SetScissorRects(1, &rect, targets.width, targets.height);
+  m.context->SetScissorRects(1, &rect, host_width, host_height);
   m.context->SetPipelineState(pipeline->pso);
   if (key.stencil_control) m.context->SetStencilRef(stencil_refmask.stencilref);
   float blend_constant[4];

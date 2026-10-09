@@ -32,11 +32,13 @@
 #include <cstdint>
 
 #include <fmt/format.h>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -46,6 +48,24 @@ REXCVAR_DEFINE_INT32(dante_debug_view, 0, "Diagnostics",
                      "renderer=dante: 0 presents the front buffer, N presents the N-th "
                      "color host render target (F11 cycles)")
     .range(0, 64);
+
+REXCVAR_DEFINE_INT32(dante_resolution_scale, 1, "Graphics",
+                     "renderer=dante: render targets at N times the game's resolution "
+                     "(2: 1280x720 -> 2560x1440); read at startup")
+    .range(1, 4);
+
+REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
+                      "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080) or 'auto' "
+                      "(window size); the 16:9 game image is fitted inside. Overrides "
+                      "dante_resolution_scale; read at startup");
+
+REXCVAR_DEFINE_INT32(dante_replay_frames, 180, "Diagnostics",
+                     "renderer=dante: keep the last N presented frames (640x360) for an "
+                     "instant replay; 0 disables")
+    .range(0, 1200);
+
+REXCVAR_DEFINE_BOOL(dante_replay_dump, false, "Diagnostics",
+                    "renderer=dante: write the instant replay to frame_dump/ (Home)");
 
 REXCVAR_DEFINE_INT32(dante_record_frames, 0, "Diagnostics",
                      "renderer=dante: save the next N presented frames as PNG to "
@@ -172,6 +192,32 @@ uint32_t FindRegisterWrite(const uint8_t* base, uint32_t start, uint32_t end, ui
 }
 
 std::mutex g_mutex;
+// Host render targets and resolve targets are round(guest size * scale).
+float g_scale_x = 1.0f, g_scale_y = 1.0f;
+// Render and resolve targets created since the last swap (replay notes).
+uint32_t g_swap_new_targets = 0;
+
+uint32_t HostX(uint32_t guest) { return uint32_t(std::lround(double(guest) * g_scale_x)); }
+uint32_t HostY(uint32_t guest) { return uint32_t(std::lround(double(guest) * g_scale_y)); }
+
+// Render scale from dante_resolution ('WxH' / 'auto') or dante_resolution_scale.
+float ResolutionScale(rex::ui::Window* window) {
+  std::string mode = REXCVAR_GET(dante_resolution);
+  uint32_t width = 0, height = 0;
+  if (mode == "auto") {
+    if (window) {
+      width = window->GetActualPhysicalWidth();
+      height = window->GetActualPhysicalHeight();
+    }
+  } else if (!mode.empty()) {
+    std::sscanf(mode.c_str(), "%ux%u", &width, &height);
+  }
+  if (width && height) {
+    return std::max(1.0f, std::min(width / 1280.0f, height / 720.0f));
+  }
+  if (!mode.empty()) REXLOG_WARN("DanteDevice: dante_resolution '{}' not understood", mode);
+  return float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+}
 std::unique_ptr<dante::NativeDevice> g_device;
 uint64_t g_frame = 0;
 bool g_log_frame = false;
@@ -279,6 +325,20 @@ bool ReadSurface(const uint8_t* base, uint32_t surface, bool depth, SurfaceDesc&
   return true;
 }
 
+// New textures start with undefined contents; guest memory starts zeroed.
+void ClearNewTexture(dl::ITexture* texture, bool depth) {
+  auto* context = g_device->immediateContext();
+  if (depth) {
+    context->ClearDepthStencil(texture->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL),
+                               dl::CLEAR_DEPTH_FLAG | dl::CLEAR_STENCIL_FLAG, 1.0f, 0,
+                               dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  } else {
+    const float zero[4] = {};
+    context->ClearRenderTarget(texture->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET), zero,
+                               dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  }
+}
+
 HostRt* GetRt(const SurfaceDesc& s) {
   RtKey key{s.base_tile, s.pitch, s.format, s.depth};
   HostRt& rt = g_rts[key];
@@ -286,8 +346,9 @@ HostRt* GetRt(const SurfaceDesc& s) {
   dl::TextureDesc desc;
   desc.Name = s.depth ? "EdramDepth" : "EdramColor";
   desc.Type = dl::RESOURCE_DIM_TEX_2D;
-  desc.Width = s.width;
-  desc.Height = std::max(s.height, rt.height);
+  uint32_t height = std::max(s.height, rt.height);
+  desc.Width = HostX(s.width);
+  desc.Height = HostY(height);
   desc.MipLevels = 1;
   desc.Format = s.depth ? DepthFormat(s.format) : ColorFormat(s.format);
   desc.BindFlags = (s.depth ? dl::BIND_DEPTH_STENCIL : dl::BIND_RENDER_TARGET) |
@@ -301,11 +362,14 @@ HostRt* GetRt(const SurfaceDesc& s) {
     g_rts.erase(key);
     return nullptr;
   }
-  rt.width = desc.Width;
-  rt.height = desc.Height;
+  ClearNewTexture(rt.texture, s.depth);
+  ++g_swap_new_targets;
+  rt.width = s.width;
+  rt.height = height;
   rt.format = desc.Format;
-  REXLOG_INFO("NATIVE-RT new {} RT: edram base={} pitch={} fmt={} -> {}x{}",
-              s.depth ? "depth" : "color", s.base_tile, s.pitch, s.format, rt.width, rt.height);
+  REXLOG_INFO("NATIVE-RT new {} RT: edram base={} pitch={} fmt={} -> {}x{} (host {}x{})",
+              s.depth ? "depth" : "color", s.base_tile, s.pitch, s.format, rt.width, rt.height,
+              desc.Width, desc.Height);
   return &rt;
 }
 
@@ -317,8 +381,8 @@ GuestTexture* GetGuestTexture(uint32_t address, uint32_t width, uint32_t height,
   dl::TextureDesc desc;
   desc.Name = "ResolveTarget";
   desc.Type = dl::RESOURCE_DIM_TEX_2D;
-  desc.Width = width;
-  desc.Height = height;
+  desc.Width = HostX(width);
+  desc.Height = HostY(height);
   desc.MipLevels = 1;
   desc.Format = GuestTextureFormat(guest_format);
   desc.BindFlags = dl::BIND_SHADER_RESOURCE | dl::BIND_RENDER_TARGET;
@@ -331,6 +395,8 @@ GuestTexture* GetGuestTexture(uint32_t address, uint32_t width, uint32_t height,
     g_textures.erase(key);
     return nullptr;
   }
+  ClearNewTexture(t.texture, false);
+  ++g_swap_new_targets;
   t.width = width;
   t.height = height;
   t.guest_format = guest_format;
@@ -503,8 +569,8 @@ void QueueReadback(GuestTexture& t, const uint8_t* base, uint32_t dest) {
     dl::TextureDesc desc;
     desc.Name = "ResolveReadback";
     desc.Type = dl::RESOURCE_DIM_TEX_2D;
-    desc.Width = t.width;
-    desc.Height = t.height;
+    desc.Width = HostX(t.width);
+    desc.Height = HostY(t.height);
     desc.Format = t.format;
     desc.Usage = dl::USAGE_STAGING;
     desc.CPUAccessFlags = dl::CPU_ACCESS_READ;
@@ -537,9 +603,12 @@ void FinishReadbacks(const uint8_t* base) {
     context->MapTextureSubresource(t.staging, 0, 0, dl::MAP_READ, dl::MAP_FLAG_DO_NOT_WAIT, nullptr,
                                    mapped);
     if (!mapped.pData) continue;
+    // Scaled targets: the centre texel of each guest texel.
     for (uint32_t y = 0; y < t.height; ++y) {
       const auto* row = reinterpret_cast<const uint32_t*>(
-          static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.Stride);
+          static_cast<const uint8_t*>(mapped.pData) +
+          size_t(std::min(uint32_t((y + 0.5f) * g_scale_y), HostY(t.height) - 1)) *
+              mapped.Stride);
       for (uint32_t x = 0; x < t.width; ++x) {
         uint32_t offset;
         if (t.depth) {
@@ -551,7 +620,7 @@ void FinishReadbacks(const uint8_t* base) {
                                      int32_t(x), int32_t(y), pitch, 2))
                                : (y * pitch + x) * 4;
         }
-        uint32_t texel = row[x];
+        uint32_t texel = row[std::min(uint32_t((x + 0.5f) * g_scale_x), HostX(t.width) - 1)];
         if (t.rb_swap) texel = (texel & 0xFF00FF00u) | ((texel >> 16) & 0xFF) | ((texel & 0xFF) << 16);
         uint32_t value = rex::graphics::xenos::GpuSwap(texel, fetch.endianness);
         std::memcpy(memory + key.address + offset, &value, 4);
@@ -602,6 +671,22 @@ void DanteOnProgramFlushBegin(uint32_t dev, const uint8_t* base) {
   g_in_program_flush = true;
   g_flush_start = Load32(base, dev + kDevRingWritePtr);
 }
+
+namespace {
+struct RingKick {
+  uint32_t old_ptr = 0, new_ptr = 0;
+};
+constexpr uint32_t kRingKickHistory = 64;
+RingKick g_ring_kicks[kRingKickHistory];
+uint32_t g_ring_kick_count = 0;
+}  // namespace
+
+void DanteOnRingKick(uint32_t old_ptr, uint32_t new_ptr) {
+  g_ring_kicks[g_ring_kick_count % kRingKickHistory] = {old_ptr, new_ptr};
+  ++g_ring_kick_count;
+}
+
+uint32_t DanteRingKickCount() { return g_ring_kick_count; }
 
 void DanteOnCommandReserve(uint32_t write_ptr) {
   if (g_in_program_flush) g_flush_start = write_ptr;
@@ -689,6 +774,8 @@ bool ParseDrawPacket(const uint8_t* base, uint32_t dev, uint32_t& initiator, uin
 // Host render targets for the bound surfaces (RT0..3 up to the first gap, depth).
 DrawTargets BoundTargets(const uint8_t* base, uint32_t dev) {
   DrawTargets t;
+  t.scale_x = g_scale_x;
+  t.scale_y = g_scale_y;
   for (uint32_t i = 0; i < 4; ++i) {
     SurfaceDesc s;
     if (!ReadSurface(base, Load32(base, dev + kDevRenderTargets + i * 4), false, s)) break;
@@ -770,6 +857,143 @@ dl::TEXTURE_COMPONENT_SWIZZLE ComponentSwizzle(uint32_t component) {
 
 std::unordered_map<uint64_t, dl::RefCntAutoPtr<dl::ITextureView>> g_front_views;
 
+// Instant replay: the last presented frames, downscaled, kept on the GPU; Home
+// writes them with per-frame notes to frame_dump/replay_<frame>/.
+constexpr uint32_t kReplayWidth = 640, kReplayHeight = 360;
+constexpr char kReplayVS[] = R"(#version 450
+void main() {
+  uint id = uint(gl_VertexIndex);
+  gl_Position = vec4(id == 1u ? 3.0 : -1.0, id == 2u ? 3.0 : -1.0, 0.0, 1.0);
+}
+)";
+constexpr char kReplayPS[] = R"(#version 450
+layout(binding = 0) uniform texture2D g_Source;
+layout(binding = 1) uniform sampler g_Linear;
+layout(location = 0) out vec4 out_color;
+void main() {
+  out_color = texture(sampler2D(g_Source, g_Linear), gl_FragCoord.xy / vec2(640.0, 360.0));
+}
+)";
+
+struct Replay {
+  dl::RefCntAutoPtr<dl::IPipelineState> pso;
+  dl::RefCntAutoPtr<dl::IShaderResourceBinding> srb;
+  std::vector<dl::RefCntAutoPtr<dl::ITexture>> frames;
+  std::vector<std::string> notes;
+  std::vector<bool> has_image;
+  uint32_t next = 0, count = 0;
+  bool failed = false;
+};
+Replay g_replay;
+
+bool EnsureReplay(uint32_t capacity) {
+  Replay& r = g_replay;
+  if (r.failed) return false;
+  if (!r.pso) {
+    r.failed = true;
+    dl::RefCntAutoPtr<dl::IShader> vs, ps;
+    vs.Attach(g_device->createGlslShader(kReplayVS, false, "ReplayVS"));
+    ps.Attach(g_device->createGlslShader(kReplayPS, true, "ReplayPS"));
+    if (!vs || !ps) return false;
+    dl::GraphicsPipelineStateCreateInfo ci;
+    ci.PSODesc.Name = "Replay";
+    ci.PSODesc.ResourceLayout.DefaultVariableType = dl::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
+    ci.pVS = vs;
+    ci.pPS = ps;
+    ci.GraphicsPipeline.NumRenderTargets = 1;
+    ci.GraphicsPipeline.RTVFormats[0] = dl::TEX_FORMAT_RGBA8_UNORM;
+    ci.GraphicsPipeline.PrimitiveTopology = dl::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    ci.GraphicsPipeline.RasterizerDesc.CullMode = dl::CULL_MODE_NONE;
+    ci.GraphicsPipeline.DepthStencilDesc.DepthEnable = dl::False;
+    g_device->renderDevice()->CreateGraphicsPipelineState(ci, &r.pso);
+    if (!r.pso) return false;
+    r.pso->CreateShaderResourceBinding(&r.srb, true);
+    dl::SamplerDesc linear;
+    linear.MinFilter = linear.MagFilter = linear.MipFilter = dl::FILTER_TYPE_LINEAR;
+    dl::RefCntAutoPtr<dl::ISampler> sampler;
+    g_device->renderDevice()->CreateSampler(linear, &sampler);
+    if (!sampler) return false;
+    r.srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, "g_Linear")->Set(sampler);
+    r.failed = false;
+  }
+  if (r.frames.size() != capacity) {
+    r.frames.assign(capacity, {});
+    r.notes.assign(capacity, {});
+    r.has_image.assign(capacity, false);
+    r.next = r.count = 0;
+  }
+  return true;
+}
+
+// Keeps the presented image (view: what the swap chain shows) and its notes.
+void ReplayCapture(dl::ITextureView* view, std::string note) {
+  int32_t capacity = REXCVAR_GET(dante_replay_frames);
+  if (capacity <= 0 || !EnsureReplay(uint32_t(capacity))) return;
+  Replay& r = g_replay;
+  uint32_t slot = r.next;
+  r.next = (r.next + 1) % uint32_t(capacity);
+  r.count = std::min(r.count + 1, uint32_t(capacity));
+  r.notes[slot] = std::move(note);
+  r.has_image[slot] = view != nullptr;
+  if (!view) return;
+  auto& texture = r.frames[slot];
+  if (!texture) {
+    dl::TextureDesc desc;
+    desc.Name = "ReplayFrame";
+    desc.Type = dl::RESOURCE_DIM_TEX_2D;
+    desc.Width = kReplayWidth;
+    desc.Height = kReplayHeight;
+    desc.Format = dl::TEX_FORMAT_RGBA8_UNORM;
+    desc.BindFlags = dl::BIND_RENDER_TARGET | dl::BIND_SHADER_RESOURCE;
+    g_device->renderDevice()->CreateTexture(desc, nullptr, &texture);
+    if (!texture) {
+      r.has_image[slot] = false;
+      return;
+    }
+  }
+  auto* context = g_device->immediateContext();
+  dl::ITextureView* rtv = texture->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
+  context->SetRenderTargets(1, &rtv, nullptr, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  dl::Viewport vp;
+  vp.Width = float(kReplayWidth);
+  vp.Height = float(kReplayHeight);
+  context->SetViewports(1, &vp, kReplayWidth, kReplayHeight);
+  r.srb->GetVariableByName(dl::SHADER_TYPE_PIXEL, "g_Source")->Set(view);
+  context->SetPipelineState(r.pso);
+  context->CommitShaderResources(r.srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  dl::DrawAttribs draw;
+  draw.NumVertices = 3;
+  context->Draw(draw);
+  context->SetRenderTargets(0, nullptr, nullptr, dl::RESOURCE_STATE_TRANSITION_MODE_NONE);
+}
+
+void ReplayDump() {
+  Replay& r = g_replay;
+  if (!r.count) {
+    REXLOG_WARN("NATIVE-REPLAY: nothing recorded (dante_replay_frames=0?)");
+    return;
+  }
+  auto dir = FrameDumpDirectory() / fmt::format("replay_f{}", g_frame);
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  std::string index;
+  uint32_t capacity = uint32_t(r.frames.size());
+  uint32_t first = (r.next + capacity - r.count) % capacity;
+  for (uint32_t i = 0; i < r.count; ++i) {
+    uint32_t slot = (first + i) % capacity;
+    index += fmt::format("{:03} {}\n", i, r.notes[slot]);
+    if (r.has_image[slot] && r.frames[slot]) {
+      DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), r.frames[slot],
+                     dir / fmt::format("{:03}.png", i));
+    }
+  }
+  if (std::FILE* f = std::fopen((dir / "index.txt").string().c_str(), "wb")) {
+    std::fwrite(index.data(), 1, index.size(), f);
+    std::fclose(f);
+  }
+  REXLOG_INFO("NATIVE-REPLAY: {} frames written to {}", r.count, dir.string());
+}
+
 dl::ITextureView* FrontBufferView(dl::ITexture* texture, uint32_t swizzle) {
   uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(texture)) ^ (uint64_t(swizzle) << 52);
   auto it = g_front_views.find(key);
@@ -811,7 +1035,9 @@ bool StartDanteDevice(rex::ui::Window* window) {
   }
   device->setDisplayAspect(16.0 / 9.0, true);
   g_device = std::move(device);
-  g_shaders = std::make_unique<ShaderCache>(g_device->renderDevice());
+  g_scale_x = g_scale_y = ResolutionScale(window);
+  REXLOG_INFO("DanteDevice: resolution scale x{:.3f} ({}x{})", g_scale_x, HostX(1280), HostY(720));
+  g_shaders = std::make_unique<ShaderCache>(g_device->renderDevice(), g_scale_x, g_scale_y);
   g_texture_cache = std::make_unique<TextureCache>(
       g_device->renderDevice(), g_device->immediateContext(),
       [](uint32_t address, uint32_t width, uint32_t height, uint32_t format,
@@ -836,6 +1062,7 @@ void StopDanteDevice() {
   g_textures.clear();
   g_readback_fence.Release();
   g_readback_value = 0;
+  g_replay = {};
   g_depth_copy = {};
   g_front_views.clear();
   g_loaded_vs = {};
@@ -953,8 +1180,20 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       t->depth = depth;
       t->slice = slice;
     }
-    uint32_t dest_info = FindRegisterWrite(base, a.ring_before,
-                                           Load32(base, dev + kDevRingWritePtr), 0x231B);
+    // The Resolve's packets, split at ring kicks (segment switches).
+    uint32_t dest_info = ~0u;
+    uint32_t span_start = a.ring_before;
+    uint32_t kicks = g_ring_kick_count - a.kicks_before;
+    if (kicks <= kRingKickHistory) {
+      for (uint32_t k = a.kicks_before; k != g_ring_kick_count; ++k) {
+        const RingKick& kick = g_ring_kicks[k % kRingKickHistory];
+        uint32_t v = FindRegisterWrite(base, span_start, kick.old_ptr, 0x231B);
+        if (v != ~0u) dest_info = v;
+        span_start = kick.new_ptr;
+      }
+      uint32_t v = FindRegisterWrite(base, span_start, Load32(base, dev + kDevRingWritePtr), 0x231B);
+      if (v != ~0u) dest_info = v;
+    }
     // Not found when the Resolve's packets cross a ring segment: keep the
     // target's previous setting (the game resolves each target the same way).
     bool rb_swap = dest_info != ~0u ? bool((dest_info >> 24) & 1) : t && t->rb_swap;
@@ -964,12 +1203,12 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
       y2 = std::min({y2, rt->height, y1 + (t->height - std::min(dst_y, t->height))});
       if (x2 > x1 && y2 > y1) {
-        dl::Box box(x1, x2, y1, y2);
+        dl::Box box(HostX(x1), HostX(x2), HostY(y1), HostY(y2));
         dl::CopyTextureAttribs copy(rt->texture, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                                     t->texture, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         copy.pSrcBox = &box;
-        copy.DstX = dst_x;
-        copy.DstY = dst_y;
+        copy.DstX = HostX(dst_x);
+        copy.DstY = HostY(dst_y);
         // The source is usually still bound as the render target.
         g_device->immediateContext()->SetRenderTargets(0, nullptr, nullptr,
                                                        dl::RESOURCE_STATE_TRANSITION_MODE_NONE);
@@ -982,7 +1221,8 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
       y2 = std::min({y2, rt->height, y1 + (t->height - std::min(dst_y, t->height))});
       if (x2 > x1 && y2 > y1) {
-        CopyDepth(*rt, t->texture, x1, y1, x2, y2, dst_x, dst_y);
+        CopyDepth(*rt, t->texture, HostX(x1), HostY(y1), HostX(x2), HostY(y2), HostX(dst_x),
+                  HostY(dst_y));
         result = "depth-copied";
       }
     } else if (t) {
@@ -1137,7 +1377,27 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
                 g_swap_dest_info_missing, found ? "" : " (front buffer missing)");
     rex::cvar::SetFlagByName("dante_record_frames", std::to_string(record - 1));
   }
-  g_swap_draws = g_swap_resolves = g_swap_dest_info_missing = 0;
+  uint32_t front_swizzle = 0;
+  dl::ITextureView* front_view = nullptr;
+  if (found) {
+    // The front buffer's fetch swizzle (dword 3 bits 1-12) maps the stored
+    // channels to RGB, e.g. ZYX1 for this game's BGR-ordered front buffer.
+    front_swizzle = (Load32(base, front + 0x28) >> 1) & 0xFFF;
+    if (it->second.rb_swap) front_swizzle = SwapRedBlue(front_swizzle);
+    front_view = FrontBufferView(it->second.texture, front_swizzle);
+  }
+  ReplayCapture(debug_view ? debug_view : front_view,
+                fmt::format("f{} front={:08X} {}x{} fmt={} rb_swap={} swizzle={:03X} draws={} "
+                            "resolves={} dest_info_missing={} new_targets={}{}",
+                            g_frame, address, key.width, key.height, key.guest_format,
+                            found && it->second.rb_swap, front_swizzle, g_swap_draws,
+                            g_swap_resolves, g_swap_dest_info_missing, g_swap_new_targets,
+                            found ? "" : " (front buffer missing)"));
+  if (REXCVAR_GET(dante_replay_dump)) {
+    rex::cvar::SetFlagByName("dante_replay_dump", "false");
+    ReplayDump();
+  }
+  g_swap_draws = g_swap_resolves = g_swap_dest_info_missing = g_swap_new_targets = 0;
   if (g_dump_frame && found) {
     DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), it->second.texture,
                    FrameDumpDirectory() / fmt::format("f{}_99_front.png", g_frame));
@@ -1157,12 +1417,8 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
   if (!g_device->updateWindowSize()) return;  // minimized
   if (debug_view) {
     g_device->presentTexture(debug_view, 0);
-  } else if (found) {
-    // The front buffer's fetch swizzle (dword 3 bits 1-12) maps the stored
-    // channels to RGB, e.g. ZYX1 for this game's BGR-ordered front buffer.
-    uint32_t swizzle = (Load32(base, front + 0x28) >> 1) & 0xFFF;
-    if (it->second.rb_swap) swizzle = SwapRedBlue(swizzle);
-    g_device->presentTexture(FrontBufferView(it->second.texture, swizzle), 0);
+  } else if (front_view) {
+    g_device->presentTexture(front_view, 0);
   } else {
     PresentTestPattern();
   }

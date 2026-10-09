@@ -35,7 +35,8 @@ struct TranslatedShaders {
 
 class ShaderCache {
  public:
-  explicit ShaderCache(Diligent::IRenderDevice* device);
+  // Render targets are scale_x / scale_y times the guest size.
+  ShaderCache(Diligent::IRenderDevice* device, float scale_x, float scale_y);
   ~ShaderCache();
 
   // Translates (cached) the shaders bound for a draw with the given state.
