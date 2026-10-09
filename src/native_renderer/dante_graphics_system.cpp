@@ -26,6 +26,10 @@ REXCVAR_DEFINE_STRING(native_render_scale, "off", "Graphics",
                       "display height (display_height / 720, rounded), "
                       "'1'-'7' forces a fixed integer scale");
 
+REXCVAR_DEFINE_BOOL(dante_packet_inventory, false, "Diagnostics",
+                    "renderer=dante: turn on the plugin's gpu_packet_inventory (PM4 packets "
+                    "the sync-only command processor executes, logged every 10 s)");
+
 namespace dante {
 
 DanteGraphicsSystem::DanteGraphicsSystem(
@@ -132,6 +136,10 @@ void ApplyDanteRendererConfig() {
   bool queries_off = rex::cvar::SetFlagByName("occlusion_query_enable", "false");
   REXLOG_INFO("renderer=dante: gpu_host_rendering=false ({}), occlusion_query_enable=false ({})",
               host_off ? "ok" : "FAILED", queries_off ? "ok" : "FAILED");
+  if (REXCVAR_GET(dante_packet_inventory)) {
+    bool ok = rex::cvar::SetFlagByName("gpu_packet_inventory", "true");
+    REXLOG_INFO("renderer=dante: gpu_packet_inventory ({})", ok ? "ok" : "FAILED");
+  }
 }
 
 void ApplyRenderScaleConfig() {

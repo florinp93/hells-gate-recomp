@@ -333,6 +333,9 @@ in RenderDoc captures of renderer=xenos (D3D12) and renderer=dante.
   complete against the native GPU timeline by writing `*[dev+10896]`;
   occlusion queries answered natively; `VdSwap` handled without PM4.
 - Exit: no PM4 parsing at all, same behaviour as M5.
+- Status (2026-10-09): parked. The CP protocol is mapped (docs/NATIVE_D3D_MAP.md,
+  "Command processor protocol"); it is needed for frame pacing above 60 fps,
+  not for parity or performance at 60.
 
 ### M6: Native-only features
 - True internal resolution (RTs we own), ultrawide without letterboxing,

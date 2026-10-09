@@ -349,3 +349,55 @@ Closed: VS variant choice (see "Vertex shader microcode actually loaded").
 Closed by the traces: argument order of `Clear`, `Resolve`, `BeginVertices`,
 the draw calls, `Swap`, `SetRenderTarget`, `SetTexture(sampler, pTex, dirtyBit)`;
 the fence and query APIs; texture / surface / buffer / PS object layouts.
+
+## Command processor protocol (M5b inventory, 2026-10-09)
+
+Measured with `gpu_packet_inventory` (`--dante_packet_inventory=true`) over
+gameplay. Besides rendering packets (draws, IM_LOAD, constants, INVALIDATE,
+bin masks) and CP-internal syncs (`WAIT_REG_MEM reg COHER_STATUS_HOST`,
+`EVENT_WRITE` 06/0F/19 without memory writes), the CP's side effects are:
+
+### Status block (`dev+10900`, GPU `1FC93000`; written via SCRATCH_REG0-7)
+
+| Offset | Scratch | Written by | Meaning |
+|--------|---------|------------|---------|
+| +0  | REG0 | CP: CPU mask (4) before INTERRUPT; interrupt handler clears its CPU bit | callback acknowledge, CP waits for 0 |
+| +4  | REG1 | CP: 1 at swap; vblank handler `0x827D4738` clears it | flip pending, CP waits for 0 (vsync pacing) |
+| +16 | REG4 | CP | callback function for the next CP interrupt |
+| +20 | REG5 | CP | callback argument |
+
+Fences: `EVENT_WRITE_SHD` (event 3) to `1FC94000` / `1FC94004` (the words
+`BlockOnFence` compares; `InsertFence` = `0x827D4010`).
+
+### Interrupts and callbacks
+
+- `VdSetGraphicsInterruptCallback(0x827D2C38, dev)` (in `0x827E2EB8`).
+  Source 1 (CP `INTERRUPT`, cpu mask 04): calls `[block+16]([block+20])`,
+  then clears the CPU bit in `[block+0]` under the lock at `dev+10904`.
+  Source 0 (vblank): if `[0x7FC86544] & 1`, calls `0x827D4738` (flip queue:
+  pops entries whose target vblank was reached, writes the display surface
+  register `0x7FC86110`, clears `[block+4]`, calls the optional game
+  callback `dev+16752`).
+- `0x827D3B48(dev, ring, flags, fn, arg)` writes a callback: SCRATCH4/5 =
+  fn/arg, SCRATCH0 = cpu mask, `INTERRUPT`, `WAIT_REG_MEM [block+0] == 0`.
+  Public wrapper `0x827D4238(dev, flags, fn, arg)` (= InsertCallback).
+- Callbacks seen: `0x827D4850` once per swap (frame counter `dev+16772`,
+  timing stats, optional game callback `dev+16748`, flip queue entry);
+  `0x827EB500` ~6/s (queues a released object on the per-CPU list at
+  `dev+11328 + cpu*108` and signals the release thread).
+
+### Swap
+
+`0x827D4AB0` (pre-Swap, before `VdSwap` in `0x827D4EE0`) with
+presentation interval (r4 == 0):
+1. SCRATCH1 = 1 and `WAIT_REG_MEM [block+4] == 1` (flip pending set),
+2. InsertCallback(`0x827D4850`, flags),
+3. `WAIT_REG_MEM [block+4] == 0`: the CP stalls until the vblank handler
+   has flipped; ring backpressure then paces the game to the display.
+
+### Other
+
+- Occlusion queries: `EVENT_WRITE_ZPD` into 16 slots (`1F53A100..1E0`,
+  `1F53A300..3E0`), ~10/s each; the CP writes fake "visible" counts.
+- `REG_RMW` reg `1841` once per swap, `COND_WRITE reg 1925 -> reg 1922`
+  (rare), `SET_CONSTANT` (registers only).

@@ -1145,13 +1145,18 @@ index 163c257..c01e0e3 100644
  }
  
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..f6314ab 100644
+index a744375..526ebe1 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -10,10 +10,12 @@
+@@ -10,10 +10,17 @@
   */
  
  #include <algorithm>
++#include <array>
++#include <chrono>
++#include <map>
++#include <string>
++#include <vector>
 +#include <atomic>
  #include <cinttypes>
  #include <cmath>
@@ -1161,7 +1166,7 @@ index a744375..f6314ab 100644
  
  #include <fmt/format.h>
  
-@@ -24,6 +26,7 @@
+@@ -24,6 +31,7 @@
  #include <rex/graphics/command_processor.h>
  #include <rex/graphics/flags.h>
  #include <rex/graphics/graphics_system.h>
@@ -1169,7 +1174,7 @@ index a744375..f6314ab 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/sampler_info.h>
  #include <rex/graphics/xenos.h>
-@@ -32,11 +35,59 @@
+@@ -32,11 +40,158 @@
  #include <rex/memory.h>
  #include <rex/memory/ring_buffer.h>
  #include <rex/stream.h>
@@ -1184,6 +1189,105 @@ index a744375..f6314ab 100644
 +                    "false: only execute the command stream's register, memory, fence and "
 +                    "interrupt side effects (used when the host renders natively)")
 +    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DEFINE_BOOL(gpu_packet_inventory, false, "GPU",
++                    "Log the executed PM4 packets and their side effects (memory writes, waits, "
++                    "fences, interrupts) every 10 seconds")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++namespace {
++
++// Command processor thread only.
++struct PacketInventory {
++  bool enabled = false;
++  uint32_t packets_since_check = 0;
++  std::chrono::steady_clock::time_point start;
++  uint64_t type_counts[4] = {};
++  uint64_t predicated_skipped = 0;
++  std::array<uint64_t, 128> type3_counts = {};
++  std::map<std::string, uint64_t> details;
++};
++PacketInventory g_inventory;
++
++const char* PacketOpcodeName(uint32_t opcode) {
++  using namespace rex::graphics::xenos;
++  switch (opcode) {
++    case PM4_ME_INIT: return "ME_INIT";
++    case PM4_NOP: return "NOP";
++    case PM4_INTERRUPT: return "INTERRUPT";
++    case PM4_XE_SWAP: return "XE_SWAP";
++    case PM4_INDIRECT_BUFFER: return "INDIRECT_BUFFER";
++    case PM4_INDIRECT_BUFFER_PFD: return "INDIRECT_BUFFER_PFD";
++    case PM4_WAIT_REG_MEM: return "WAIT_REG_MEM";
++    case PM4_REG_RMW: return "REG_RMW";
++    case PM4_REG_TO_MEM: return "REG_TO_MEM";
++    case PM4_MEM_WRITE: return "MEM_WRITE";
++    case PM4_COND_WRITE: return "COND_WRITE";
++    case PM4_EVENT_WRITE: return "EVENT_WRITE";
++    case PM4_EVENT_WRITE_SHD: return "EVENT_WRITE_SHD";
++    case PM4_EVENT_WRITE_EXT: return "EVENT_WRITE_EXT";
++    case PM4_EVENT_WRITE_ZPD: return "EVENT_WRITE_ZPD";
++    case PM4_DRAW_INDX: return "DRAW_INDX";
++    case PM4_DRAW_INDX_2: return "DRAW_INDX_2";
++    case PM4_SET_CONSTANT: return "SET_CONSTANT";
++    case PM4_SET_CONSTANT2: return "SET_CONSTANT2";
++    case PM4_LOAD_ALU_CONSTANT: return "LOAD_ALU_CONSTANT";
++    case PM4_SET_SHADER_CONSTANTS: return "SET_SHADER_CONSTANTS";
++    case PM4_IM_LOAD: return "IM_LOAD";
++    case PM4_IM_LOAD_IMMEDIATE: return "IM_LOAD_IMMEDIATE";
++    case PM4_INVALIDATE_STATE: return "INVALIDATE_STATE";
++    case PM4_VIZ_QUERY: return "VIZ_QUERY";
++    case PM4_SET_BIN_MASK_LO: return "SET_BIN_MASK_LO";
++    case PM4_SET_BIN_MASK_HI: return "SET_BIN_MASK_HI";
++    case PM4_SET_BIN_SELECT_LO: return "SET_BIN_SELECT_LO";
++    case PM4_SET_BIN_SELECT_HI: return "SET_BIN_SELECT_HI";
++    case PM4_SET_BIN_MASK: return "SET_BIN_MASK";
++    case PM4_SET_BIN_SELECT: return "SET_BIN_SELECT";
++    case PM4_CONTEXT_UPDATE: return "CONTEXT_UPDATE";
++    case PM4_WAIT_FOR_IDLE: return "WAIT_FOR_IDLE";
++    default: return "?";
++  }
++}
++
++void InventoryAdd(std::string key) {
++  if (g_inventory.enabled) ++g_inventory.details[std::move(key)];
++}
++
++void InventoryTick() {
++  if (++g_inventory.packets_since_check < 1024) return;
++  g_inventory.packets_since_check = 0;
++  bool enabled = REXCVAR_GET(gpu_packet_inventory);
++  auto now = std::chrono::steady_clock::now();
++  if (enabled && !g_inventory.enabled) {
++    g_inventory = {};
++    g_inventory.start = now;
++  }
++  g_inventory.enabled = enabled;
++  if (!enabled || now - g_inventory.start < std::chrono::seconds(10)) return;
++  double seconds = std::chrono::duration<double>(now - g_inventory.start).count();
++  REXGPU_INFO("PM4-INV {:.1f}s: type0={} type1={} type2={} type3={} predicated_skipped={}",
++              seconds, g_inventory.type_counts[0], g_inventory.type_counts[1],
++              g_inventory.type_counts[2], g_inventory.type_counts[3],
++              g_inventory.predicated_skipped);
++  for (uint32_t op = 0; op < 128; ++op) {
++    if (g_inventory.type3_counts[op]) {
++      REXGPU_INFO("PM4-INV   op {:02X} {}: {}", op, PacketOpcodeName(op),
++                  g_inventory.type3_counts[op]);
++    }
++  }
++  std::vector<std::pair<uint64_t, std::string>> sorted;
++  for (auto& [key, count] : g_inventory.details) sorted.emplace_back(count, key);
++  std::sort(sorted.rbegin(), sorted.rend());
++  for (size_t i = 0; i < sorted.size() && i < 60; ++i) {
++    REXGPU_INFO("PM4-INV   {} x{}", sorted[i].second, sorted[i].first);
++  }
++  if (sorted.size() > 60) REXGPU_INFO("PM4-INV   ... {} more", sorted.size() - 60);
++  g_inventory = {};
++  g_inventory.enabled = true;
++  g_inventory.start = now;
++}
++
++}  // namespace
 +
 +// Diagnostic draw observer registered by the host executable. Called on the
 +// command processor thread after each draw; packet_end (guest physical, just
@@ -1229,7 +1333,56 @@ index a744375..f6314ab 100644
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
                      "Disable for minor CPU overhead reduction, but may break memory coherency.")
-@@ -958,9 +1009,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+@@ -366,6 +521,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+       // Enabled - write to address.
+       uint32_t scratch_addr = regs.values[XE_GPU_REG_SCRATCH_ADDR];
+       uint32_t mem_addr = scratch_addr + (scratch_reg * 4);
++      InventoryAdd(fmt::format("SCRATCH{} -> mem {:08X}", scratch_reg, mem_addr));
+       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(mem_addr), value);
+     }
+   } else {
+@@ -384,6 +540,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+       } break;
+ 
+       case XE_GPU_REG_DC_LUT_SEQ_COLOR: {
++        InventoryAdd("gamma ramp write (DC_LUT_SEQ_COLOR)");
+         // Should be in the 256-entry table writing mode.
+         assert_zero(regs[XE_GPU_REG_DC_LUT_RW_MODE] & 0b1);
+         auto gamma_ramp_rw_index = regs.Get<reg::DC_LUT_RW_INDEX>();
+@@ -665,9 +822,11 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
+ bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
+   const uint32_t packet_type = packet >> 30;
++  InventoryTick();
+   if (packet == 0) {
+     return true;
+   }
++  if (g_inventory.enabled) ++g_inventory.type_counts[packet_type];
+ 
+   if (packet == 0xCDCDCDCD) {
+     REXGPU_WARN("GPU packet is CDCDCDCD - probably read uninitialized memory!");
+@@ -747,10 +906,12 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
+   if (packet & 1) {
+     bool any_pass = (bin_select_ & bin_mask_) != 0;
+     if (!any_pass || opcode == PM4_XE_SWAP) {
++      if (g_inventory.enabled) ++g_inventory.predicated_skipped;
+       reader->AdvanceRead(count * sizeof(uint32_t));
+       return true;
+     }
+   }
++  if (g_inventory.enabled) ++g_inventory.type3_counts[opcode];
+ 
+   bool result = false;
+   switch (opcode) {
+@@ -916,6 +1077,7 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
+ 
+   // generate interrupt from the command stream
+   uint32_t cpu_mask = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("INTERRUPT cpu_mask={:02X}", cpu_mask));
+   for (int n = 0; n < 6; n++) {
+     if (cpu_mask & (1 << n)) {
+       if (graphics_system_) {
+@@ -958,9 +1120,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
    uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
    reader->AdvanceRead((count - 4) * sizeof(uint32_t));
  
@@ -1258,7 +1411,81 @@ index a744375..f6314ab 100644
    return true;
  }
  
-@@ -1206,7 +1276,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+@@ -988,9 +1169,15 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+   uint32_t wait = reader->ReadAndSwap<uint32_t>();
+ 
+   bool is_memory = (wait_info & 0x10) != 0;
++  if (g_inventory.enabled) {
++    InventoryAdd(fmt::format("WAIT_REG_MEM {} {:08X} func={} ref={:08X} mask={:08X}",
++                             is_memory ? "mem" : "reg", poll_reg_addr, wait_info & 7, ref, mask));
++  }
++  uint32_t wait_iterations = 0;
+ 
+   bool matched = false;
+   do {
++    ++wait_iterations;
+     uint32_t value = 0;
+     if (is_memory) {
+       value =
+@@ -1051,6 +1238,10 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+       }
+     }
+   } while (!matched);
++  if (wait_iterations > 1) {
++    InventoryAdd(fmt::format("WAIT_REG_MEM had to wait: {} {:08X}", is_memory ? "mem" : "reg",
++                             poll_reg_addr));
++  }
+ 
+   return true;
+ }
+@@ -1062,6 +1253,7 @@ bool CommandProcessor::ExecutePacketType3_REG_RMW(memory::RingBuffer* reader, ui
+   uint32_t rmw_info = reader->ReadAndSwap<uint32_t>();
+   uint32_t and_mask = reader->ReadAndSwap<uint32_t>();
+   uint32_t or_mask = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("REG_RMW reg {:04X}", rmw_info & 0x1FFF));
+   uint32_t value = register_file_->values[rmw_info & 0x1FFF];
+   if ((rmw_info >> 31) & 0x1) {
+     // & reg
+@@ -1090,6 +1282,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+   uint32_t mem_addr = reader->ReadAndSwap<uint32_t>();
+ 
+   uint32_t reg_val = ReadRegisterValue(reg_addr);
++  InventoryAdd(fmt::format("REG_TO_MEM reg {:04X} -> mem {:08X}", reg_addr, mem_addr & ~3u));
+ 
+   auto endianness = static_cast<xenos::Endian>(mem_addr & 0x3);
+   mem_addr &= ~0x3;
+@@ -1102,6 +1295,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader, uint32_t packet,
+                                                     uint32_t count) {
+   uint32_t write_addr = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("MEM_WRITE {:08X} dwords={}", write_addr & ~3u, count - 1));
+   for (uint32_t i = 0; i < count - 1; i++) {
+     uint32_t write_data = reader->ReadAndSwap<uint32_t>();
+ 
+@@ -1124,6 +1318,9 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
+   uint32_t mask = reader->ReadAndSwap<uint32_t>();
+   uint32_t write_reg_addr = reader->ReadAndSwap<uint32_t>();
+   uint32_t write_data = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("COND_WRITE poll {} {:08X} -> {} {:08X}",
++                           (wait_info & 0x10) ? "mem" : "reg", poll_reg_addr,
++                           (wait_info & 0x100) ? "mem" : "reg", write_reg_addr));
+   uint32_t value;
+   if (wait_info & 0x10) {
+     // Memory.
+@@ -1184,6 +1381,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE(memory::RingBuffer* reader
+   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
++  InventoryAdd(fmt::format("EVENT_WRITE event={:02X} count={}", initiator & 0x3F, count));
+   if (count == 1) {
+     // Just an event flag? Where does this write?
+   } else {
+@@ -1203,10 +1401,12 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+ 
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
++  InventoryAdd(fmt::format("EVENT_WRITE_SHD event={:02X} -> mem {:08X}{}", initiator & 0x3F,
++                           address & ~3u, ((initiator >> 31) & 1) ? " (vblank counter)" : ""));
    uint32_t data_value;
    if ((initiator >> 31) & 0x1) {
      // Write counter (GPU vblank counter?).
@@ -1267,7 +1494,24 @@ index a744375..f6314ab 100644
    } else {
      // Write value.
      data_value = value;
-@@ -1282,6 +1352,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+@@ -1228,6 +1428,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT(memory::RingBuffer* re
+   auto endianness = static_cast<xenos::Endian>(address & 0x3);
+   address &= ~0x3;
+ 
++  InventoryAdd(fmt::format("EVENT_WRITE_EXT (screen extents) -> mem {:08X}", address));
+   // Let us hope we can fake this.
+   // This callback tells the driver the xy coordinates affected by a previous
+   // drawcall.
+@@ -1255,6 +1456,8 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
+ 
++  InventoryAdd(fmt::format("EVENT_WRITE_ZPD (occlusion query) -> mem {:08X}",
++                           register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]));
+   // Occlusion queries:
+   // This command is send on query begin and end.
+   // As a workaround report some fixed amount of passed samples.
+@@ -1282,6 +1485,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
    return true;
  }
  
@@ -1352,7 +1596,7 @@ index a744375..f6314ab 100644
  bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32_t packet,
                                                const char* opcode_name, uint32_t viz_query_condition,
                                                uint32_t count_remaining) {
-@@ -1368,7 +1516,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1368,7 +1649,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // we don't support yet.
    reader->AdvanceRead(count_remaining * sizeof(uint32_t));
  
@@ -1364,7 +1608,7 @@ index a744375..f6314ab 100644
      auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
      if (!(viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z)) {
        // TODO(Triang3l): Don't drop the draw call completely if the vertex
-@@ -1378,6 +1529,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1378,6 +1662,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
  
        bool major_mode_explicit =
            xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
@@ -1374,7 +1618,7 @@ index a744375..f6314ab 100644
        draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                                   is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
        if (!draw_succeeded) {
-@@ -1400,6 +1554,53 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1400,6 +1687,53 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // for instance, features not supported by the host), don't terminate command
    // buffer processing as that would leave rendering in a way more inconsistent
    // state than just a single dropped draw command.
@@ -1428,7 +1672,7 @@ index a744375..f6314ab 100644
    return true;
  }
  
-@@ -1611,4 +1812,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
+@@ -1611,4 +1945,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
    return true;
  }
  
