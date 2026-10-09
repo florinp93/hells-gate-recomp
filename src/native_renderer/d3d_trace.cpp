@@ -11,6 +11,7 @@
 #include "dante_device.h"
 #include "gpu_state.h"
 #include "native_observer.h"
+#include "renderdoc_capture.h"
 
 #include <atomic>
 #include <chrono>
@@ -359,5 +360,6 @@ REX_HOOK_RAW(sub_827D4EE0) {
   TraceFrameBoundary();
   native::ObserveFrameBoundary();
   native::DanteOnSwap(args, base, g_tracing.load(std::memory_order_relaxed));
+  native::RenderDocOnGuestSwap();
   FrameHeartbeat();
 }

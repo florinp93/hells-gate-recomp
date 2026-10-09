@@ -38,6 +38,7 @@ set(DANTESINFERNO_SOURCES
     src/main.cpp
     # D3D hooks: strong overrides of the generated weak aliases, so in the exe.
     src/native_renderer/d3d_trace.cpp
+    src/native_renderer/renderdoc_capture.cpp
     src/native_renderer/native_observer.cpp
     src/native_renderer/gpu_state.cpp
 )
@@ -233,6 +234,7 @@ if(DANTESINFERNO_NATIVE_RENDERER)
     set(DANTESINFERNO_NATIVE_SOURCES
         src/native_renderer/dantes_inferno_native_main.cpp
         src/native_renderer/d3d_trace.cpp
+        src/native_renderer/renderdoc_capture.cpp
         src/native_renderer/native_observer.cpp
         src/native_renderer/gpu_state.cpp
     )

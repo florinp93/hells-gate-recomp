@@ -323,6 +323,11 @@ class DantesInfernoApp : public rex::ReXApp {
       REXLOG_INFO("dante_debug_view={}", view);
     });
 
+    rex::ui::RegisterBind("bind_rdoc_capture", "Insert",
+                          "Under RenderDoc: capture the next guest frames", [] {
+      rex::cvar::SetFlagByName("rdoc_capture_frame", "true");
+    });
+
     rex::ui::RegisterBind("bind_dante_record", "F5",
                           "renderer=dante: record the next 3600 presented frames", [this] {
       bool start = rex::cvar::Query<int32_t>("dante_record_frames") == 0;
@@ -463,6 +468,7 @@ class DantesInfernoApp : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_host_rendering");
     rex::ui::UnregisterBind("bind_dante_debug_view");
     rex::ui::UnregisterBind("bind_dante_record");
+    rex::ui::UnregisterBind("bind_rdoc_capture");
     rex::ui::UnregisterBind("bind_fps_overlay");
     rex::ui::UnregisterBind("bind_exit_game");
     rex::cvar::UnregisterChangeCallbacks("time_scalar");

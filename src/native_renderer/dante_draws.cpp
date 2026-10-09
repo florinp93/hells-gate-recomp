@@ -816,7 +816,12 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
     dl::ITexture* dummy = t.dimension == '3'   ? m.dummy_3d.RawPtr()
                           : t.dimension == 'c' ? m.dummy_cube.RawPtr()
                                                : m.dummy_2d.RawPtr();
-    if (!view && m.missing_textures.insert((uint64_t(fetch[1]) << 32) | fetch[2]).second &&
+    // 3D fetches also get a 2D (stacked) binding; the shader picks one by the
+    // fetch constant's dimension, so the other one is unused.
+    bool unused_binding =
+        (t.dimension == '3') != (fetch_constant.dimension == xenos::DataDimension::k3D);
+    if (!view && !unused_binding &&
+        m.missing_textures.insert((uint64_t(fetch[1]) << 32) | fetch[2]).second &&
         m.missing_textures.size() <= 64) {
       REXLOG_INFO("NATIVE-TEX no texture for fetch {} ({}): {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                   t.fetch_constant, t.dimension, fetch[0], fetch[1], fetch[2], fetch[3], fetch[4],
