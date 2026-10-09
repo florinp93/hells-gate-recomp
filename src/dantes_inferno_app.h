@@ -258,6 +258,8 @@ class DantesInfernoApp : public rex::ReXApp {
     dante::ApplyDanteRendererConfig();
     if (rex::cvar::Query<std::string>("renderer") == "dante") {
       native::StartDanteDevice(window());
+      // renderer=dante sets the aspect from a resolution wider than 16:9.
+      g_ultrawide_target_aspect = static_cast<float>(REXCVAR_GET(ultrawide_target_aspect));
     }
     rex::chrono::Clock::set_guest_time_scalar(REXCVAR_GET(time_scalar));
 

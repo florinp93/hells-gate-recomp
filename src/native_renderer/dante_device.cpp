@@ -55,9 +55,9 @@ REXCVAR_DEFINE_INT32(dante_resolution_scale, 1, "Graphics",
     .range(1, 4);
 
 REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
-                      "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080) or 'auto' "
-                      "(window size); the 16:9 game image is fitted inside. Overrides "
-                      "dante_resolution_scale; read at startup");
+                      "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080, 3440x1440) or "
+                      "'auto' (window size). Wider than 16:9 turns on the game's ultrawide "
+                      "aspect. Overrides dante_resolution_scale; read at startup");
 
 REXCVAR_DEFINE_INT32(dante_replay_frames, 180, "Diagnostics",
                      "renderer=dante: keep the last N presented frames (640x360) for an "
@@ -200,8 +200,15 @@ uint32_t g_swap_new_targets = 0;
 uint32_t HostX(uint32_t guest) { return uint32_t(std::lround(double(guest) * g_scale_x)); }
 uint32_t HostY(uint32_t guest) { return uint32_t(std::lround(double(guest) * g_scale_y)); }
 
+struct RenderScale {
+  float x = 1.0f, y = 1.0f;
+  double display_aspect = 16.0 / 9.0;
+};
+
 // Render scale from dante_resolution ('WxH' / 'auto') or dante_resolution_scale.
-float ResolutionScale(rex::ui::Window* window) {
+// With the game's ultrawide_target_aspect set, the 1280x720 guest targets are
+// rendered anamorphically: height from the resolution, width = height * aspect.
+RenderScale ComputeRenderScale(rex::ui::Window* window) {
   std::string mode = REXCVAR_GET(dante_resolution);
   uint32_t width = 0, height = 0;
   if (mode == "auto") {
@@ -212,11 +219,30 @@ float ResolutionScale(rex::ui::Window* window) {
   } else if (!mode.empty()) {
     std::sscanf(mode.c_str(), "%ux%u", &width, &height);
   }
-  if (width && height) {
-    return std::max(1.0f, std::min(width / 1280.0f, height / 720.0f));
+  if (!mode.empty() && !(width && height)) {
+    REXLOG_WARN("DanteDevice: dante_resolution '{}' not understood", mode);
   }
-  if (!mode.empty()) REXLOG_WARN("DanteDevice: dante_resolution '{}' not understood", mode);
-  return float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+  RenderScale scale;
+  double aspect = rex::cvar::Query<double>("ultrawide_target_aspect");
+  // A resolution wider than 16:9 turns on the game's ultrawide aspect.
+  if (aspect <= 0.0 && width && height && double(width) / height > 16.0 / 9.0 + 0.01) {
+    aspect = double(width) / height;
+    rex::cvar::SetFlagByName("ultrawide_target_aspect", fmt::format("{:.4f}", aspect));
+  }
+  if (aspect > 0.0) {
+    float out_height = height ? float(height)
+                              : 720.0f * float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+    scale.y = std::max(1.0f, out_height / 720.0f);
+    scale.x = std::max(1.0f, float(720.0 * scale.y * aspect) / 1280.0f);
+    scale.display_aspect = aspect;
+    return scale;
+  }
+  if (width && height) {
+    scale.x = scale.y = std::max(1.0f, std::min(width / 1280.0f, height / 720.0f));
+  } else {
+    scale.x = scale.y = float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+  }
+  return scale;
 }
 std::unique_ptr<dante::NativeDevice> g_device;
 uint64_t g_frame = 0;
@@ -1033,10 +1059,13 @@ bool StartDanteDevice(rex::ui::Window* window) {
     REXLOG_ERROR("DanteDevice: native device initialization failed");
     return false;
   }
-  device->setDisplayAspect(16.0 / 9.0, true);
+  RenderScale scale = ComputeRenderScale(window);
+  device->setDisplayAspect(scale.display_aspect, true);
   g_device = std::move(device);
-  g_scale_x = g_scale_y = ResolutionScale(window);
-  REXLOG_INFO("DanteDevice: resolution scale x{:.3f} ({}x{})", g_scale_x, HostX(1280), HostY(720));
+  g_scale_x = scale.x;
+  g_scale_y = scale.y;
+  REXLOG_INFO("DanteDevice: resolution scale {:.3f} x {:.3f} ({}x{}, display aspect {:.4f})",
+              g_scale_x, g_scale_y, HostX(1280), HostY(720), scale.display_aspect);
   g_shaders = std::make_unique<ShaderCache>(g_device->renderDevice(), g_scale_x, g_scale_y);
   g_texture_cache = std::make_unique<TextureCache>(
       g_device->renderDevice(), g_device->immediateContext(),

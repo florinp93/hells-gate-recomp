@@ -803,6 +803,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   // Textures and samplers of this draw.
   const uint32_t* fetch_base = &regs.values[rg::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0];
   std::string texture_log;
+  // Video frames (VP6 decoded to Y/U/V k_8 planes, drawn full screen): 16:9
+  // content that must not be widened by an anamorphic (ultrawide) scale.
+  uint32_t video_planes = 0;
+  bool video_luma = false;
   for (const TextureVariable& t : pipeline->textures) {
     const uint32_t* fetch = fetch_base + (t.fetch_constant & 31) * 6;
     char source = '-';
@@ -836,6 +840,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
                   t.fetch_constant, t.dimension, fetch[0], fetch[1], fetch[2], fetch[3], fetch[4],
                   fetch[5]);
     }
+    if (fetch_constant.format == xenos::TextureFormat::k_8 && !t.is_signed) {
+      ++video_planes;
+      video_luma |= fetch_constant.size_2d.width + 1 >= 640;
+    }
     if (view && source == 'R' && (scale_x != 1.0f || scale_y != 1.0f)) {
       sc.textures_resolution_scaled |= 1u << (t.fetch_constant & 31);
     }
@@ -862,6 +870,13 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   vp.Height = float(viewport.xy_extent[1]);
   vp.MinDepth = viewport.z_min;
   vp.MaxDepth = viewport.z_max;
+  if (video_planes >= 3 && video_luma && scale_x != scale_y) {
+    // Squeeze around the render target's centre back to the 16:9 shape.
+    float squeeze = scale_y / scale_x;
+    float center = 0.5f * float(host_x(targets.width));
+    vp.TopLeftX = center + (vp.TopLeftX - center) * squeeze;
+    vp.Width *= squeeze;
+  }
   const uint32_t host_width = host_x(targets.width), host_height = host_y(targets.height);
   m.context->SetViewports(1, &vp, host_width, host_height);
   rg::draw_util::Scissor scissor;
