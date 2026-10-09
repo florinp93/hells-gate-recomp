@@ -1,5 +1,7 @@
 #include "dante_shaders.h"
 
+#include "dante_dump.h"
+
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
 #include "Graphics/GraphicsEngine/interface/Shader.h"
@@ -9,17 +11,24 @@
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
 #include <rex/graphics/util/draw.h>
+#include <rex/cvar.h>
 #include <rex/logging/macros.h>
 #include <rex/string/buffer.h>
 
 #include <xxhash.h>
 
+#include <fmt/format.h>
+
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+REXCVAR_DEFINE_BOOL(dante_dump_shaders, false, "Diagnostics",
+                    "renderer=dante: write each guest shader's disassembly to frame_dump/");
 
 namespace native {
 namespace {
@@ -127,6 +136,16 @@ struct ShaderCache::Impl {
     if (!entry.shader) {
       entry.shader = std::make_unique<rg::SpirvShader>(type, hash, code.ucode, code.dwords);
       entry.shader->AnalyzeUcode(disasm_buffer);
+      if (REXCVAR_GET(dante_dump_shaders)) {
+        auto path = FrameDumpDirectory() /
+                    fmt::format("{}_{:016X}.txt",
+                                type == rg::xenos::ShaderType::kVertex ? "vs" : "ps", hash);
+        if (std::FILE* f = std::fopen(path.string().c_str(), "wb")) {
+          const std::string& text = entry.shader->ucode_disassembly();
+          std::fwrite(text.data(), 1, text.size(), f);
+          std::fclose(f);
+        }
+      }
     }
     return entry;
   }

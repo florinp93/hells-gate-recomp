@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -209,6 +210,8 @@ struct DrawRenderer::Impl {
   dl::RefCntAutoPtr<dl::IBuffer> fetch;
 
   dl::RefCntAutoPtr<dl::ITexture> dummy_2d, dummy_3d, dummy_cube;
+  // Fetch constants (dwords 1-2) already reported as having no texture.
+  std::set<uint64_t> missing_textures;
   dl::RefCntAutoPtr<dl::ISampler> dummy_sampler;
 
   std::unordered_map<PipelineKey, Pipeline, PipelineKeyHash> pipelines;
@@ -813,6 +816,12 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
     dl::ITexture* dummy = t.dimension == '3'   ? m.dummy_3d.RawPtr()
                           : t.dimension == 'c' ? m.dummy_cube.RawPtr()
                                                : m.dummy_2d.RawPtr();
+    if (!view && m.missing_textures.insert((uint64_t(fetch[1]) << 32) | fetch[2]).second &&
+        m.missing_textures.size() <= 64) {
+      REXLOG_INFO("NATIVE-TEX no texture for fetch {} ({}): {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                  t.fetch_constant, t.dimension, fetch[0], fetch[1], fetch[2], fetch[3], fetch[4],
+                  fetch[5]);
+    }
     t.variable->Set(view ? view : dummy->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE));
   }
   for (const SamplerVariable& s : pipeline->samplers) {
@@ -866,7 +875,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
     REXLOG_INFO(
         "NATIVE-DRAW prim={} count={} {} idx={} vp=({},{} {}x{} z {:.3f}..{:.3f}) "
         "ndc=({:.4f},{:.4f},{:.4f})+({:.4f},{:.4f},{:.4f}) scissor=({},{})-({},{}) rt={}x{} "
-        "colors={} depth={} zfunc={} ztest={} mask={:04X} blend={:08X} ps={}{}{}",
+        "colors={} depth={} zfunc={} ztest={} mask={:04X} blend={:08X} vs={:016X} ps={:016X}{}{}",
         uint32_t(initiator.prim_type), count, indexed ? "dma" : "auto", indices.size(),
         viewport.xy_offset[0], viewport.xy_offset[1], viewport.xy_extent[0],
         viewport.xy_extent[1], viewport.z_min, viewport.z_max, viewport.ndc_scale[0],
@@ -874,7 +883,8 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
         viewport.ndc_offset[1], viewport.ndc_offset[2], rect.left, rect.top, rect.right,
         rect.bottom, targets.width, targets.height, targets.color_count,
         targets.depth != nullptr, key.depth_func, key.depth_enable, key.color_mask, key.blend[0],
-        shaders.pixel != nullptr, vertex_log, texture_log);
+        shaders.vertex_info->ucode_data_hash(),
+        shaders.pixel_info ? shaders.pixel_info->ucode_data_hash() : 0, vertex_log, texture_log);
   }
   return true;
 }

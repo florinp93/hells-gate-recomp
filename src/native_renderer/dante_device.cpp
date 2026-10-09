@@ -10,6 +10,7 @@
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
 #include "Graphics/GraphicsEngine/interface/Buffer.h"
+#include "Graphics/GraphicsEngine/interface/Fence.h"
 #include "Graphics/GraphicsEngine/interface/PipelineState.h"
 #include "Graphics/GraphicsEngine/interface/Sampler.h"
 #include "Graphics/GraphicsEngine/interface/ShaderResourceBinding.h"
@@ -20,6 +21,7 @@
 
 #include <rex/cvar.h>
 #include <xxhash.h>
+#include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
 #include <rex/logging/macros.h>
@@ -31,6 +33,7 @@
 
 #include <fmt/format.h>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -43,6 +46,11 @@ REXCVAR_DEFINE_INT32(dante_debug_view, 0, "Diagnostics",
                      "renderer=dante: 0 presents the front buffer, N presents the N-th "
                      "color host render target (F11 cycles)")
     .range(0, 64);
+
+REXCVAR_DEFINE_INT32(dante_record_frames, 0, "Diagnostics",
+                     "renderer=dante: save the next N presented frames as PNG to "
+                     "frame_dump/record/ (F5 starts / stops a 3600 frame recording)")
+    .range(0, 1000000);
 
 namespace native {
 namespace {
@@ -90,11 +98,14 @@ struct GuestTextureKey {
   uint32_t width;
   uint32_t height;
   uint32_t guest_format;
+  // 0 for 2D destinations, 1 + slice for a slice of a 3D texture.
+  uint32_t slice = 0;
   bool operator==(const GuestTextureKey&) const = default;
 };
 struct GuestTextureKeyHash {
   size_t operator()(const GuestTextureKey& k) const {
-    return (size_t(k.address) << 24) ^ (size_t(k.width) << 12) ^ k.height ^ (size_t(k.guest_format) << 40);
+    return (size_t(k.address) << 24) ^ (size_t(k.width) << 12) ^ k.height ^
+           (size_t(k.guest_format) << 40) ^ (size_t(k.slice) << 48);
   }
 };
 struct GuestTexture {
@@ -106,6 +117,14 @@ struct GuestTexture {
   // Last resolve had RB_COPY_DEST_INFO.copy_dest_swap: guest memory holds
   // red and blue exchanged relative to the host texture.
   bool rb_swap = false;
+  // Write-back to guest memory: staging copy, fence value it waits for (0 =
+  // none pending) and the destination fetch constant.
+  dl::RefCntAutoPtr<dl::ITexture> staging;
+  uint64_t readback_fence = 0;
+  uint32_t readback_fetch[6] = {};
+  bool written_back = false;
+  // Destination is slice `slice` of a 3D texture `depth` deep (depth 0: 2D).
+  uint32_t depth = 0, slice = 0;
 };
 
 // Swaps the red and blue channel selectors of a 12-bit host swizzle.
@@ -291,8 +310,8 @@ HostRt* GetRt(const SurfaceDesc& s) {
 }
 
 GuestTexture* GetGuestTexture(uint32_t address, uint32_t width, uint32_t height,
-                              uint32_t guest_format) {
-  GuestTextureKey key{address, width, height, guest_format};
+                              uint32_t guest_format, uint32_t slice = 0) {
+  GuestTextureKey key{address, width, height, guest_format, slice};
   GuestTexture& t = g_textures[key];
   if (t.texture) return &t;
   dl::TextureDesc desc;
@@ -452,9 +471,100 @@ GuestShaderCode g_last_ps;
 // Index buffer of the last submitted draw (M2 observer cross-check).
 uint32_t g_last_index_base = 0, g_last_index_count = 0, g_last_index_format = 0;
 bool g_in_program_flush = false;
+// Draws and resolves since the last swap (frame recorder log).
+uint32_t g_swap_draws = 0, g_swap_resolves = 0, g_swap_dest_info_missing = 0;
 uint32_t g_flush_start = 0;
 
 constexpr uint32_t kPhysicalBase = 0xA0000000u;
+
+// Small resolves and resolves into 3D textures are written back to guest
+// memory, one frame late: the game reads some on the CPU (64x8 k_32_FLOAT scene
+// luminance -> exposure) and samples 3D ones (colour grading LUTs rendered
+// slice by slice), which the texture cache loads from guest memory.
+constexpr uint32_t kReadbackMaxTexels = 4096;
+dl::RefCntAutoPtr<dl::IFence> g_readback_fence;
+uint64_t g_readback_value = 0;
+
+void QueueReadback(GuestTexture& t, const uint8_t* base, uint32_t dest) {
+  using rex::graphics::xenos::TextureFormat;
+  if ((t.guest_format != uint32_t(TextureFormat::k_32_FLOAT) &&
+       t.guest_format != uint32_t(TextureFormat::k_8_8_8_8)) ||
+      (!t.depth && t.width * t.height > kReadbackMaxTexels) || t.readback_fence) {
+    return;
+  }
+  auto* device = g_device->renderDevice();
+  if (!g_readback_fence) {
+    dl::FenceDesc desc;
+    desc.Name = "ResolveReadback";
+    device->CreateFence(desc, &g_readback_fence);
+    if (!g_readback_fence) return;
+  }
+  if (!t.staging) {
+    dl::TextureDesc desc;
+    desc.Name = "ResolveReadback";
+    desc.Type = dl::RESOURCE_DIM_TEX_2D;
+    desc.Width = t.width;
+    desc.Height = t.height;
+    desc.Format = t.format;
+    desc.Usage = dl::USAGE_STAGING;
+    desc.CPUAccessFlags = dl::CPU_ACCESS_READ;
+    device->CreateTexture(desc, nullptr, &t.staging);
+    if (!t.staging) return;
+  }
+  auto* context = g_device->immediateContext();
+  dl::CopyTextureAttribs copy(t.texture, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, t.staging,
+                              dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+  context->CopyTexture(copy);
+  context->EnqueueSignal(g_readback_fence, ++g_readback_value);
+  t.readback_fence = g_readback_value;
+  for (uint32_t i = 0; i < 6; ++i) t.readback_fetch[i] = Load32(base, dest + 0x1C + i * 4);
+}
+
+// Copies finished readbacks into guest memory (tiling and endianness of the
+// destination fetch constant).
+void FinishReadbacks(const uint8_t* base) {
+  if (!g_readback_fence) return;
+  uint64_t completed = g_readback_fence->GetCompletedValue();
+  auto* context = g_device->immediateContext();
+  uint8_t* memory = const_cast<uint8_t*>(base) + kPhysicalBase;
+  for (auto& [key, t] : g_textures) {
+    if (!t.readback_fence || t.readback_fence > completed) continue;
+    t.readback_fence = 0;
+    rex::graphics::xenos::xe_gpu_texture_fetch_t fetch;
+    std::memcpy(&fetch, t.readback_fetch, sizeof(fetch));
+    uint32_t pitch = std::max(uint32_t(fetch.pitch) << 5, t.width);
+    dl::MappedTextureSubresource mapped;
+    context->MapTextureSubresource(t.staging, 0, 0, dl::MAP_READ, dl::MAP_FLAG_DO_NOT_WAIT, nullptr,
+                                   mapped);
+    if (!mapped.pData) continue;
+    for (uint32_t y = 0; y < t.height; ++y) {
+      const auto* row = reinterpret_cast<const uint32_t*>(
+          static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.Stride);
+      for (uint32_t x = 0; x < t.width; ++x) {
+        uint32_t offset;
+        if (t.depth) {
+          offset = fetch.tiled ? uint32_t(rex::graphics::texture_util::GetTiledOffset3D(
+                                     int32_t(x), int32_t(y), int32_t(t.slice), pitch, t.height, 2))
+                               : ((t.slice * ((t.height + 31) & ~31u) + y) * pitch + x) * 4;
+        } else {
+          offset = fetch.tiled ? uint32_t(rex::graphics::texture_util::GetTiledOffset2D(
+                                     int32_t(x), int32_t(y), pitch, 2))
+                               : (y * pitch + x) * 4;
+        }
+        uint32_t texel = row[x];
+        if (t.rb_swap) texel = (texel & 0xFF00FF00u) | ((texel >> 16) & 0xFF) | ((texel & 0xFF) << 16);
+        uint32_t value = rex::graphics::xenos::GpuSwap(texel, fetch.endianness);
+        std::memcpy(memory + key.address + offset, &value, 4);
+      }
+    }
+    context->UnmapTextureSubresource(t.staging, 0, 0);
+    if (!t.written_back) {
+      t.written_back = true;
+      REXLOG_INFO("NATIVE-RT resolve {:08X} {}x{} written back to guest memory (tiled={} endian={})",
+                  key.address, t.width, t.height, bool(fetch.tiled), uint32_t(fetch.endianness));
+    }
+  }
+}
 
 // Parses the PM4 packets written in (start, end] (end = last dword written).
 void ScanProgramFlush(const uint8_t* base, uint32_t start, uint32_t end) {
@@ -609,6 +719,7 @@ DrawTargets BoundTargets(const uint8_t* base, uint32_t dev) {
 // Effective state + shaders + draw for the draw just submitted.
 void SubmitDraw(uint32_t dev, uint32_t initiator, uint32_t dma_base, uint32_t dma_size,
                 const InlineDraw* inline_draw, const uint8_t* base) {
+  ++g_swap_draws;
   State state;
   Capture(dev, base, state);
   uint32_t index = 0;
@@ -723,6 +834,8 @@ void StopDanteDevice() {
   if (!g_device) return;
   g_rts.clear();
   g_textures.clear();
+  g_readback_fence.Release();
+  g_readback_value = 0;
   g_depth_copy = {};
   g_front_views.clear();
   g_loaded_vs = {};
@@ -789,6 +902,7 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
   std::lock_guard lock(g_mutex);
   if (!g_device) return;
   FlushDrawLog();
+  ++g_swap_resolves;
   uint32_t dev = a.r[0];
   uint32_t flags = a.r[1];
   uint32_t source = flags & 7;
@@ -823,10 +937,28 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
     uint32_t guest_format = dword1 & 0x3F;
     uint32_t width = (dword2 & 0x1FFF) + 1;
     uint32_t height = ((dword2 >> 13) & 0x1FFF) + 1;
-    GuestTexture* t = GetGuestTexture(address, width, height, guest_format);
+    uint32_t depth = 0, slice = 0;
+    rex::graphics::xenos::xe_gpu_texture_fetch_t dest_fetch;
+    uint32_t dest_dwords[6];
+    for (uint32_t i = 0; i < 6; ++i) dest_dwords[i] = Load32(base, dest + 0x1C + i * 4);
+    std::memcpy(&dest_fetch, dest_dwords, sizeof(dest_fetch));
+    if (dest_fetch.dimension == rex::graphics::xenos::DataDimension::k3D) {
+      width = dest_fetch.size_3d.width + 1;
+      height = dest_fetch.size_3d.height + 1;
+      depth = dest_fetch.size_3d.depth + 1;
+      slice = std::min(a.r[6], depth - 1);
+    }
+    GuestTexture* t = GetGuestTexture(address, width, height, guest_format, depth ? slice + 1 : 0);
+    if (t) {
+      t->depth = depth;
+      t->slice = slice;
+    }
     uint32_t dest_info = FindRegisterWrite(base, a.ring_before,
                                            Load32(base, dev + kDevRingWritePtr), 0x231B);
-    bool rb_swap = dest_info != ~0u && ((dest_info >> 24) & 1);
+    // Not found when the Resolve's packets cross a ring segment: keep the
+    // target's previous setting (the game resolves each target the same way).
+    bool rb_swap = dest_info != ~0u ? bool((dest_info >> 24) & 1) : t && t->rb_swap;
+    if (dest_info == ~0u) ++g_swap_dest_info_missing;
     const char* result = "skipped";
     if (t && !from_depth && t->format == rt->format) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
@@ -838,9 +970,13 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
         copy.pSrcBox = &box;
         copy.DstX = dst_x;
         copy.DstY = dst_y;
+        // The source is usually still bound as the render target.
+        g_device->immediateContext()->SetRenderTargets(0, nullptr, nullptr,
+                                                       dl::RESOURCE_STATE_TRANSITION_MODE_NONE);
         g_device->immediateContext()->CopyTexture(copy);
         t->rb_swap = rb_swap;
         result = rb_swap ? "copied(rb swap)" : "copied";
+        QueueReadback(*t, base, dest);
       }
     } else if (t && from_depth && t->format == dl::TEX_FORMAT_R32_FLOAT) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
@@ -945,6 +1081,7 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
   std::lock_guard lock(g_mutex);
   if (!g_device) return;
   FlushDrawLog();
+  FinishReadbacks(base);
   g_frame_draws = 0;
 
   uint32_t front = a.r[1];
@@ -985,6 +1122,22 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
     REXLOG_INFO("NATIVE-RT f{} swap front={:08X} {}", g_frame, address,
                 found ? "presented" : "missing (test pattern)");
   }
+  if (int32_t record = REXCVAR_GET(dante_record_frames); record > 0) {
+    if (found) {
+      auto dir = FrameDumpDirectory() / "record";
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), it->second.texture,
+                     dir / fmt::format("f{:06}.png", g_frame));
+    }
+    REXLOG_INFO("NATIVE-REC f{} front={:08X} {}x{} fmt={} rb_swap={} draws={} resolves={} "
+                "dest_info_missing={}{}",
+                g_frame, address, key.width, key.height, key.guest_format,
+                found && it->second.rb_swap, g_swap_draws, g_swap_resolves,
+                g_swap_dest_info_missing, found ? "" : " (front buffer missing)");
+    rex::cvar::SetFlagByName("dante_record_frames", std::to_string(record - 1));
+  }
+  g_swap_draws = g_swap_resolves = g_swap_dest_info_missing = 0;
   if (g_dump_frame && found) {
     DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), it->second.texture,
                    FrameDumpDirectory() / fmt::format("f{}_99_front.png", g_frame));

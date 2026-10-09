@@ -188,6 +188,8 @@ bool NativeDevice::initialize(void* hwnd, uint32_t width, uint32_t height) {
 
   Diligent::EngineVkCreateInfo engine_ci;
   engine_ci.GraphicsAPIVersion = Diligent::Version{1, 3};
+  // Per-draw constant uploads of a full frame (renderer=dante) exceed the 8 MB default.
+  engine_ci.DynamicHeapSize = 64u << 20;
 #ifdef NDEBUG
   engine_ci.EnableValidation = false;
 #else
