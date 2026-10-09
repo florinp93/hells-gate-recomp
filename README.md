@@ -183,6 +183,45 @@ Code `dantes_inferno_exe.sh` is:
  ./out/build/linux-release/dantes_inferno
 ```
 
+## Linux build (openSUSE Tumbleweed)
+
+The Ubuntu steps above work on openSUSE Tumbleweed with the changes below.
+Steps 1 to 4 were tested on Tumbleweed with Clang 23. Steps 5 to 9 need
+`game/default.xex` and are not yet tested on openSUSE.
+
+Clone the repository to a path with no apostrophe (`'`) in it. Parts of the
+build pass the path to the shell unquoted, and an apostrophe breaks them.
+
+### 1. Install the dependencies
+
+```bash
+cp dantes_inferno_manifest.toml dantes_inferno_manifest.toml.back
+./scripts/install_opensuse.sh
+```
+
+### 2. Set up the SDK
+
+PowerShell is not needed:
+
+```bash
+./setup.sh
+```
+
+`setup.sh` clones the ReXGlue SDK and applies the project's SDK patch, as
+`setup.ps1` does. It also clones DiligentCore and applies its patch. The
+native renderer (`DANTESINFERNO_NATIVE_RENDERER`, on by default) needs
+DiligentCore, and CMake stops with an error without it.
+
+### 3 to 9. Build and run
+
+Follow the Ubuntu steps from step 3. In every `cmake -B` command, use the
+system Clang instead of Clang 22:
+
+```bash
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+```
+
 ## Progress Tracker
 
 - [x] Game boots, runs, and is fully playable
