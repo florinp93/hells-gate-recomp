@@ -36,6 +36,7 @@ endif()
 
 set(DANTESINFERNO_SOURCES
     src/main.cpp
+    src/frame_rate_hooks.cpp
     # D3D hooks: strong overrides of the generated weak aliases, so in the exe.
     src/native_renderer/d3d_trace.cpp
     src/native_renderer/renderdoc_capture.cpp
