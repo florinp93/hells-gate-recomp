@@ -3990,10 +3990,20 @@ index 3f1a852..a6e6ed7 100644
          io_status_block->status = result;
          io_status_block->information = bytes_read;
 diff --git a/src/kernel/xboxkrnl/xboxkrnl_video.cpp b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
-index 1254710..3308c40 100644
+index 1254710..655213a 100644
 --- a/src/kernel/xboxkrnl/xboxkrnl_video.cpp
 +++ b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
-@@ -481,6 +481,24 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
+@@ -238,7 +238,8 @@ void VdQueryVideoMode(X_VIDEO_MODE* video_mode) {
+   video_mode->display_width = display_width;
+   video_mode->display_height = display_height;
+   video_mode->is_interlaced = 0;
+-  video_mode->is_widescreen = display_width * 3 >= display_height * 4;
++  // Wider than 4:3; 640x480 and 1024x768 are standard (4:3) modes.
++  video_mode->is_widescreen = display_width * 3 > display_height * 4;
+   video_mode->is_hi_def = display_width >= 1280 || display_height >= 720;
+   video_mode->refresh_rate = refresh_rate_hz;
+   video_mode->video_standard = 1;  // NTSC
+@@ -481,6 +482,24 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
  
    auto texture_format = rex::graphics::xenos::TextureFormat(texture_format_ptr.value());
    auto color_space = *color_space_ptr;

@@ -871,11 +871,19 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const DrawShaders& shaders
   vp.MinDepth = viewport.z_min;
   vp.MaxDepth = viewport.z_max;
   if (video_planes >= 3 && video_luma && scale_x != scale_y) {
-    // Squeeze around the render target's centre back to the 16:9 shape.
-    float squeeze = scale_y / scale_x;
-    float center = 0.5f * float(host_x(targets.width));
-    vp.TopLeftX = center + (vp.TopLeftX - center) * squeeze;
-    vp.Width *= squeeze;
+    // Squeeze around the render target's centre back to the 16:9 shape:
+    // pillarbox on wider aspects, letterbox on narrower ones.
+    if (scale_x > scale_y) {
+      float squeeze = scale_y / scale_x;
+      float center = 0.5f * float(host_x(targets.width));
+      vp.TopLeftX = center + (vp.TopLeftX - center) * squeeze;
+      vp.Width *= squeeze;
+    } else {
+      float squeeze = scale_x / scale_y;
+      float center = 0.5f * float(host_y(targets.height));
+      vp.TopLeftY = center + (vp.TopLeftY - center) * squeeze;
+      vp.Height *= squeeze;
+    }
   }
   const uint32_t host_width = host_x(targets.width), host_height = host_y(targets.height);
   m.context->SetViewports(1, &vp, host_width, host_height);

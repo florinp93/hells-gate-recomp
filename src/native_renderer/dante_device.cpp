@@ -56,8 +56,8 @@ REXCVAR_DEFINE_INT32(dante_resolution_scale, 1, "Graphics",
 
 REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
                       "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080, 3440x1440) or "
-                      "'auto' (window size). Wider than 16:9 turns on the game's ultrawide "
-                      "aspect. Overrides dante_resolution_scale; read at startup");
+                      "'auto' (window size). Wider than 16:9 sets the game's display aspect. "
+                      "Overrides dante_resolution_scale; read at startup");
 
 REXCVAR_DEFINE_INT32(dante_replay_frames, 180, "Diagnostics",
                      "renderer=dante: keep the last N presented frames (640x360) for an "
@@ -224,7 +224,21 @@ RenderScale ComputeRenderScale(rex::ui::Window* window) {
   }
   RenderScale scale;
   double aspect = rex::cvar::Query<double>("ultrawide_target_aspect");
-  // A resolution wider than 16:9 turns on the game's ultrawide aspect.
+  // 4:3 (or narrower): the game's own standard-definition mode, chosen from a
+  // 640x480 video mode: UI laid out for 4:3, 3D still rendered into the 16:9
+  // 1280x720 targets and squeezed to 4:3 like the console's scaler, so the
+  // scale is anamorphic.
+  if (aspect <= 0.0 && width && height && double(width) / height <= 4.0 / 3.0 + 0.01) {
+    rex::cvar::SetFlagByName("video_mode_width", "640");
+    rex::cvar::SetFlagByName("video_mode_height", "480");
+    float out_height = std::min(float(height), width * 3.0f / 4.0f);
+    scale.y = std::max(1.0f, out_height / 720.0f);
+    scale.x = std::max(1.0f, scale.y * 0.75f);
+    scale.display_aspect = 4.0 / 3.0;
+    return scale;
+  }
+  // Wider than 16:9 sets the game's display aspect (anamorphic below). Aspects
+  // between 4:3 and 16:9 stay 16:9, letterboxed.
   if (aspect <= 0.0 && width && height && double(width) / height > 16.0 / 9.0 + 0.01) {
     aspect = double(width) / height;
     rex::cvar::SetFlagByName("ultrawide_target_aspect", fmt::format("{:.4f}", aspect));
