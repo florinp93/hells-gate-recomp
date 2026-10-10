@@ -332,6 +332,12 @@ class DantesInfernoApp : public rex::ReXApp {
       rex::cvar::SetFlagByName("rdoc_capture_frame", "true");
     });
 
+    rex::ui::RegisterBind("bind_dante_smaa", "End", "renderer=dante: toggle SMAA", [] {
+      bool enabled = !rex::cvar::Query<bool>("dante_smaa");
+      rex::cvar::SetFlagByName("dante_smaa", enabled ? "true" : "false");
+      REXLOG_INFO("SMAA {}", enabled ? "on" : "off");
+    });
+
     rex::ui::RegisterBind("bind_dante_replay", "Home",
                           "renderer=dante: save the instant replay (last 3 seconds)", [] {
       rex::cvar::SetFlagByName("dante_replay_dump", "true");
@@ -478,6 +484,7 @@ class DantesInfernoApp : public rex::ReXApp {
     rex::ui::UnregisterBind("bind_dante_debug_view");
     rex::ui::UnregisterBind("bind_dante_record");
     rex::ui::UnregisterBind("bind_dante_replay");
+    rex::ui::UnregisterBind("bind_dante_smaa");
     rex::ui::UnregisterBind("bind_rdoc_capture");
     rex::ui::UnregisterBind("bind_fps_overlay");
     rex::ui::UnregisterBind("bind_exit_game");

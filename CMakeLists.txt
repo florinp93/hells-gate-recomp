@@ -102,6 +102,7 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         src/native_renderer/dante_draws.cpp
         src/native_renderer/dante_dump.cpp
         src/native_renderer/dante_shaders.cpp
+        src/native_renderer/dante_smaa.cpp
         src/native_renderer/dante_textures.cpp
         src/native_renderer/dante_graphics_system.cpp
         src/native_renderer/native_device.cpp

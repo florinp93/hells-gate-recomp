@@ -294,6 +294,7 @@ namespace DantesInferno
                     ? FormatResolution(width, height)
                     : NativeResolution(display);
                 args.Add("--dante_resolution=" + resolution);
+                args.Add(config.Smaa ? "--dante_smaa=true" : "--dante_smaa=false");
             }
 
             string aspect = NormalizeAspect(config.Aspect);

@@ -143,6 +143,12 @@ namespace DantesInferno
             set { Set("anisotropic_override", Math.Max(-1, Math.Min(16, value))); }
         }
 
+        public bool Smaa
+        {
+            get { return Get("smaa", true); }
+            set { Set("smaa", value); }
+        }
+
         public bool ShowFpsOverlay
         {
             get { return Get("show_fps_overlay", false); }

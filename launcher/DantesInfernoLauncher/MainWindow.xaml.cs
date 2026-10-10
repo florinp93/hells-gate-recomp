@@ -147,6 +147,7 @@ namespace DantesInferno.Launcher
             AnisoCombo.SelectedIndex = aniso;
 
             FullscreenCheck.IsChecked = _config.Fullscreen;
+            SmaaCheck.IsChecked = _config.Smaa;
             FpsOverlayCheck.IsChecked = _config.ShowFpsOverlay;
 
             ControllerFixCheck.IsChecked = _config.InputBackend.Equals("sdl", StringComparison.OrdinalIgnoreCase);
@@ -266,6 +267,8 @@ namespace DantesInferno.Launcher
             LabelGameLanguage.Content = Lt(LauncherLocalizer.LabelGameLanguage);
             LabelLauncherLanguage.Content = Lt(LauncherLocalizer.LabelLauncherLanguage);
             FullscreenCheck.Content = Lt(LauncherLocalizer.CheckFullscreen);
+            SmaaCheck.Content = Lt(LauncherLocalizer.CheckSmaa);
+            SmaaCheck.ToolTip = Lt(LauncherLocalizer.SmaaTooltip);
             GroupControlsSettings.Header = Lt(LauncherLocalizer.GroupControls);
             ControllerFixCheck.Content = Lt(LauncherLocalizer.CheckControllerBackend);
             ControllerFixCheck.ToolTip = Lt(LauncherLocalizer.ControllerTooltip);
@@ -515,6 +518,7 @@ namespace DantesInferno.Launcher
                 _config.FrameRate = frameRate;
 
             _config.ShowFpsOverlay = FpsOverlayCheck.IsChecked ?? false;
+            _config.Smaa = SmaaCheck.IsChecked ?? true;
 
             int anisoIdx = AnisoCombo.SelectedIndex;
             if (anisoIdx <= 0)
@@ -734,6 +738,7 @@ namespace DantesInferno.Launcher
             _config.Aspect = DisplayOptions.AspectAuto;
             _config.FrameRate = Math.Min(DisplayOptions.DefaultFrameRate, DisplayOptions.MaxFrameRate(_displayAspect));
             _config.ShowFpsOverlay = false;
+            _config.Smaa = true;
             _config.AnisotropicOverride = -1;
             _config.Fullscreen = true;
             _config.InputBackend = "sdl";

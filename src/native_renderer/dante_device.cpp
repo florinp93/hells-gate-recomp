@@ -3,6 +3,7 @@
 #include "dante_draws.h"
 #include "dante_dump.h"
 #include "dante_shaders.h"
+#include "dante_smaa.h"
 #include "dante_stats.h"
 #include "dante_textures.h"
 #include "gpu_state.h"
@@ -61,6 +62,9 @@ REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
                       "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080, 3440x1440) or "
                       "'auto' (window size). Wider than 16:9 sets the game's display aspect. "
                       "Overrides dante_resolution_scale; read at startup");
+
+REXCVAR_DEFINE_BOOL(dante_smaa, true, "Graphics",
+                    "renderer=dante: SMAA anti-aliasing of the presented frame");
 
 REXCVAR_DEFINE_INT32(dante_replay_frames, 180, "Diagnostics",
                      "renderer=dante: keep the last N presented frames (640x360) for an "
@@ -271,6 +275,7 @@ std::set<uint64_t> g_reported_conversions;
 std::unique_ptr<ShaderCache> g_shaders;
 std::unique_ptr<TextureCache> g_texture_cache;
 std::unique_ptr<DrawRenderer> g_draws;
+std::unique_ptr<SmaaPass> g_smaa;
 std::unique_ptr<rex::graphics::RegisterFile> g_regs;
 uint32_t g_draws_without_shaders = 0;
 uint32_t g_draws_unparsed = 0;
@@ -1154,6 +1159,7 @@ bool StartDanteDevice(rex::ui::Window* window) {
       });
   g_draws = std::make_unique<DrawRenderer>(g_device->renderDevice(), g_device->immediateContext(),
                                            g_texture_cache.get());
+  g_smaa = std::make_unique<SmaaPass>(g_device.get());
   g_regs = std::make_unique<rex::graphics::RegisterFile>();
   g_frame = 0;
   REXLOG_INFO("DanteDevice: presenting on the game window (SDK presenter detached)");
@@ -1172,6 +1178,7 @@ void StopDanteDevice() {
   g_front_views.clear();
   g_loaded_vs = {};
   g_last_ps = {};
+  g_smaa.reset();
   g_draws.reset();
   g_texture_cache.reset();
   g_shaders.reset();
@@ -1481,6 +1488,18 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
                 found && it->second.rb_swap, g_swap_draws, g_swap_resolves,
                 g_swap_dest_info_missing, found ? "" : " (front buffer missing)");
     rex::cvar::SetFlagByName("dante_record_frames", std::to_string(record - 1));
+  }
+  // Anti-alias the finished frame (3D and UI) before it is presented.
+  if (found && g_smaa && REXCVAR_GET(dante_smaa)) {
+    if (g_dump_frame) {
+      DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), it->second.texture,
+                     FrameDumpDirectory() / fmt::format("f{}_98_front_before_smaa.png", g_frame));
+    }
+    g_smaa->Apply(it->second.texture);
+    if (g_dump_frame && g_smaa->Edges()) {
+      DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), g_smaa->Edges(),
+                     FrameDumpDirectory() / fmt::format("f{}_98_smaa_edges.png", g_frame));
+    }
   }
   uint32_t front_swizzle = 0;
   dl::ITextureView* front_view = nullptr;

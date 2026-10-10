@@ -103,6 +103,11 @@ bool DumpTexturePng(dl::IRenderDevice* device, dl::IDeviceContext* context, dl::
         case dl::TEX_FORMAT_RGBA8_UNORM:
           for (int c = 0; c < 4; ++c) out[c] = row[x * 4 + c] / 255.0f;
           break;
+        case dl::TEX_FORMAT_RG8_UNORM:
+          out[0] = row[x * 2] / 255.0f;
+          out[1] = row[x * 2 + 1] / 255.0f;
+          out[2] = 0.0f;
+          break;
         case dl::TEX_FORMAT_RGB10A2_UNORM: {
           uint32_t v;
           std::memcpy(&v, row + x * 4, 4);
@@ -143,7 +148,8 @@ bool DumpTexturePng(dl::IRenderDevice* device, dl::IDeviceContext* context, dl::
 
   // Float formats: normalize RGB to the observed range so HDR / depth are visible.
   bool is_float = src.Format != dl::TEX_FORMAT_RGBA8_UNORM &&
-                  src.Format != dl::TEX_FORMAT_RGB10A2_UNORM;
+                  src.Format != dl::TEX_FORMAT_RGB10A2_UNORM &&
+                  src.Format != dl::TEX_FORMAT_RG8_UNORM;
   float lo = FLT_MAX, hi = -FLT_MAX;
   for (size_t i = 0; i < rgba.size(); i += 4) {
     for (int c = 0; c < 3; ++c) {
