@@ -6,7 +6,7 @@
 #define MyAppPublisher "florinp93"
 #define MyAppURL "https://github.com/florinp93/hells-gate-recomp"
 #define MyAppExeName "DantesInfernoLauncher.exe"
-#define MyAppVersion "0.7.2-beta-hotfix"
+#define MyAppVersion "0.8.0-beta"
 
 [Setup]
 AppId={{DANTES-INFERNO-PC-PORT}}
