@@ -224,6 +224,7 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="180" />
@@ -245,16 +246,19 @@
                                     <Label x:Name="LabelTextureFiltering" Grid.Row="4" Grid.Column="0" Content="Texture Filtering:" />
                                     <ComboBox x:Name="AnisoCombo" Grid.Row="4" Grid.Column="1" Margin="0,2" />
 
-                                    <Label x:Name="LabelGameLanguage" Grid.Row="5" Grid.Column="0" Content="Game Language:" />
-                                    <ComboBox x:Name="LanguageCombo" Grid.Row="5" Grid.Column="1" Margin="0,2"
+                                    <Label x:Name="LabelShadowQuality" Grid.Row="5" Grid.Column="0" Content="Shadow Quality:" />
+                                    <ComboBox x:Name="ShadowCombo" Grid.Row="5" Grid.Column="1" Margin="0,2" />
+
+                                    <Label x:Name="LabelGameLanguage" Grid.Row="6" Grid.Column="0" Content="Game Language:" />
+                                    <ComboBox x:Name="LanguageCombo" Grid.Row="6" Grid.Column="1" Margin="0,2"
                                               ToolTip="Game language. Detected from the XEX game region. English is always available." />
 
-                                    <Label x:Name="LabelLauncherLanguage" Grid.Row="6" Grid.Column="0" Content="Launcher Language:" />
-                                    <ComboBox x:Name="LauncherLanguageCombo" Grid.Row="6" Grid.Column="1" Margin="0,2"
+                                    <Label x:Name="LabelLauncherLanguage" Grid.Row="7" Grid.Column="0" Content="Launcher Language:" />
+                                    <ComboBox x:Name="LauncherLanguageCombo" Grid.Row="7" Grid.Column="1" Margin="0,2"
                                               ToolTip="Language for the launcher interface."
                                               SelectionChanged="LauncherLanguageCombo_SelectionChanged" />
 
-                                    <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <StackPanel Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
                                         <CheckBox x:Name="FullscreenCheck" Content="Fullscreen" Margin="0,0,15,0" />
                                         <CheckBox x:Name="SmaaCheck" Content="SMAA anti-aliasing" Margin="0,0,15,0" />
                                         <CheckBox x:Name="FpsOverlayCheck" Content="FPS Overlay" Margin="0" />

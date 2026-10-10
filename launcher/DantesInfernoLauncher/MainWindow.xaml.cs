@@ -146,6 +146,8 @@ namespace DantesInferno.Launcher
             if (aniso < 0) aniso = 0;
             AnisoCombo.SelectedIndex = aniso;
 
+            PopulateShadowCombo(_config.ShadowScale);
+
             FullscreenCheck.IsChecked = _config.Fullscreen;
             SmaaCheck.IsChecked = _config.Smaa;
             FpsOverlayCheck.IsChecked = _config.ShowFpsOverlay;
@@ -159,6 +161,21 @@ namespace DantesInferno.Launcher
             PopulateLanguageCombo();
             PopulateLauncherLanguageCombo();
             PopulateKeybinds();
+        }
+
+        private void PopulateShadowCombo(int selected)
+        {
+            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
+            var items = new List<KeyValuePair<int, string>>
+            {
+                new KeyValuePair<int, string>(1, Lt(LauncherLocalizer.ShadowOriginal)),
+                new KeyValuePair<int, string>(2, Lt(LauncherLocalizer.ShadowHigh)),
+                new KeyValuePair<int, string>(4, Lt(LauncherLocalizer.ShadowUltra)),
+            };
+            ShadowCombo.ItemsSource = items;
+            ShadowCombo.DisplayMemberPath = "Value";
+            ShadowCombo.SelectedValuePath = "Key";
+            ShadowCombo.SelectedValue = DisplayOptions.NormalizeShadowScale(selected);
         }
 
         private void PopulateLauncherLanguageCombo()
@@ -269,6 +286,9 @@ namespace DantesInferno.Launcher
             FullscreenCheck.Content = Lt(LauncherLocalizer.CheckFullscreen);
             SmaaCheck.Content = Lt(LauncherLocalizer.CheckSmaa);
             SmaaCheck.ToolTip = Lt(LauncherLocalizer.SmaaTooltip);
+            LabelShadowQuality.Content = Lt(LauncherLocalizer.LabelShadowQuality);
+            ShadowCombo.ToolTip = Lt(LauncherLocalizer.ShadowTooltip);
+            PopulateShadowCombo(ShadowCombo.SelectedValue is int shadow ? shadow : _config.ShadowScale);
             GroupControlsSettings.Header = Lt(LauncherLocalizer.GroupControls);
             ControllerFixCheck.Content = Lt(LauncherLocalizer.CheckControllerBackend);
             ControllerFixCheck.ToolTip = Lt(LauncherLocalizer.ControllerTooltip);
@@ -519,6 +539,8 @@ namespace DantesInferno.Launcher
 
             _config.ShowFpsOverlay = FpsOverlayCheck.IsChecked ?? false;
             _config.Smaa = SmaaCheck.IsChecked ?? true;
+            if (ShadowCombo.SelectedValue is int shadowScale)
+                _config.ShadowScale = shadowScale;
 
             int anisoIdx = AnisoCombo.SelectedIndex;
             if (anisoIdx <= 0)
@@ -739,6 +761,7 @@ namespace DantesInferno.Launcher
             _config.FrameRate = Math.Min(DisplayOptions.DefaultFrameRate, DisplayOptions.MaxFrameRate(_displayAspect));
             _config.ShowFpsOverlay = false;
             _config.Smaa = true;
+            _config.ShadowScale = DisplayOptions.DefaultShadowScale;
             _config.AnisotropicOverride = -1;
             _config.Fullscreen = true;
             _config.InputBackend = "sdl";

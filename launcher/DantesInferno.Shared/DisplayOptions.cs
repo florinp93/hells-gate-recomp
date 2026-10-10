@@ -265,6 +265,15 @@ namespace DantesInferno
             return AspectAuto;
         }
 
+        public const int DefaultShadowScale = 2;
+
+        public static int NormalizeShadowScale(int scale)
+        {
+            if (scale >= 4) return 4;
+            if (scale >= 2) return 2;
+            return 1;
+        }
+
         public static bool IsRendererFallback(GameConfig config)
         {
             return config.RendererOverride.Equals("xenos", StringComparison.OrdinalIgnoreCase);
@@ -295,6 +304,8 @@ namespace DantesInferno
                     : NativeResolution(display);
                 args.Add("--dante_resolution=" + resolution);
                 args.Add(config.Smaa ? "--dante_smaa=true" : "--dante_smaa=false");
+                args.Add(string.Format(CultureInfo.InvariantCulture, "--dante_shadow_scale={0}",
+                    NormalizeShadowScale(config.ShadowScale)));
             }
 
             string aspect = NormalizeAspect(config.Aspect);

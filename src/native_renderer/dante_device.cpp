@@ -45,6 +45,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -62,6 +63,11 @@ REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
                       "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080, 3440x1440) or "
                       "'auto' (window size). Wider than 16:9 sets the game's display aspect. "
                       "Overrides dante_resolution_scale; read at startup");
+
+REXCVAR_DEFINE_INT32(dante_shadow_scale, 2, "Graphics",
+                     "renderer=dante: shadow map resolution relative to the frame's (1 = "
+                     "original, 2 or 4 = sharper shadows); read at startup")
+    .range(1, 4);
 
 REXCVAR_DEFINE_BOOL(dante_smaa, true, "Graphics",
                     "renderer=dante: SMAA anti-aliasing of the presented frame");
@@ -110,11 +116,20 @@ struct RtKeyHash {
   }
 };
 
+// Host pixels per guest pixel of a target or resolve texture.
+struct Scale {
+  float x = 1.0f, y = 1.0f;
+  bool operator==(const Scale&) const = default;
+  uint32_t X(uint32_t guest) const { return uint32_t(std::lround(double(guest) * x)); }
+  uint32_t Y(uint32_t guest) const { return uint32_t(std::lround(double(guest) * y)); }
+};
+
 struct HostRt {
   uint32_t width = 0;
   uint32_t height = 0;
   dl::TEXTURE_FORMAT format = dl::TEX_FORMAT_UNKNOWN;
   dl::RefCntAutoPtr<dl::ITexture> texture;
+  Scale scale;
 };
 
 // Native stand-in for a guest texture written by Resolve; no copy goes back to
@@ -152,6 +167,7 @@ struct GuestTexture {
   bool written_back = false;
   // Destination is slice `slice` of a 3D texture `depth` deep (depth 0: 2D).
   uint32_t depth = 0, slice = 0;
+  Scale scale;
 };
 
 // Swaps the red and blue channel selectors of a 12-bit host swizzle.
@@ -270,6 +286,15 @@ uint32_t g_dump_seq = 0;
 uint32_t g_frame_draws = 0;
 RtKey g_draw_key{};
 std::unordered_map<RtKey, HostRt, RtKeyHash> g_rts;
+// Depth targets drawn without color targets (shadow maps): rendered at
+// ShadowScale(), above the frame's resolution.
+std::unordered_set<RtKey, RtKeyHash> g_shadow_rts;
+float g_shadow_factor = 1.0f;
+
+Scale ShadowScale() {
+  float s = std::max(g_scale_x, g_scale_y) * g_shadow_factor;
+  return {s, s};
+}
 std::unordered_map<GuestTextureKey, GuestTexture, GuestTextureKeyHash> g_textures;
 std::set<uint64_t> g_reported_conversions;
 std::unique_ptr<ShaderCache> g_shaders;
@@ -384,14 +409,21 @@ void ClearNewTexture(dl::ITexture* texture, bool depth) {
 
 HostRt* GetRt(const SurfaceDesc& s) {
   RtKey key{s.base_tile, s.pitch, s.format, s.depth};
+  Scale scale{g_scale_x, g_scale_y};
+  if (g_shadow_rts.count(key)) {
+    scale = ShadowScale();
+    // Within the device's largest texture.
+    float limit = 16384.0f / float(std::max(s.width, s.height));
+    scale.x = scale.y = std::min(scale.x, limit);
+  }
   HostRt& rt = g_rts[key];
-  if (rt.texture && rt.width == s.width && rt.height >= s.height) return &rt;
+  if (rt.texture && rt.width == s.width && rt.height >= s.height && rt.scale == scale) return &rt;
   dl::TextureDesc desc;
   desc.Name = s.depth ? "EdramDepth" : "EdramColor";
   desc.Type = dl::RESOURCE_DIM_TEX_2D;
   uint32_t height = std::max(s.height, rt.height);
-  desc.Width = HostX(s.width);
-  desc.Height = HostY(height);
+  desc.Width = scale.X(s.width);
+  desc.Height = scale.Y(height);
   desc.MipLevels = 1;
   desc.Format = s.depth ? DepthFormat(s.format) : ColorFormat(s.format);
   desc.BindFlags = (s.depth ? dl::BIND_DEPTH_STENCIL : dl::BIND_RENDER_TARGET) |
@@ -410,22 +442,24 @@ HostRt* GetRt(const SurfaceDesc& s) {
   rt.width = s.width;
   rt.height = height;
   rt.format = desc.Format;
+  rt.scale = scale;
   REXLOG_INFO("NATIVE-RT new {} RT: edram base={} pitch={} fmt={} -> {}x{} (host {}x{})",
               s.depth ? "depth" : "color", s.base_tile, s.pitch, s.format, rt.width, rt.height,
               desc.Width, desc.Height);
   return &rt;
 }
 
+// `scale`: of the render target resolved into it.
 GuestTexture* GetGuestTexture(uint32_t address, uint32_t width, uint32_t height,
-                              uint32_t guest_format, uint32_t slice = 0) {
+                              uint32_t guest_format, uint32_t slice, Scale scale) {
   GuestTextureKey key{address, width, height, guest_format, slice};
   GuestTexture& t = g_textures[key];
-  if (t.texture) return &t;
+  if (t.texture && t.scale == scale) return &t;
   dl::TextureDesc desc;
   desc.Name = "ResolveTarget";
   desc.Type = dl::RESOURCE_DIM_TEX_2D;
-  desc.Width = HostX(width);
-  desc.Height = HostY(height);
+  desc.Width = scale.X(width);
+  desc.Height = scale.Y(height);
   desc.MipLevels = 1;
   desc.Format = GuestTextureFormat(guest_format);
   desc.BindFlags = dl::BIND_SHADER_RESOURCE | dl::BIND_RENDER_TARGET;
@@ -444,6 +478,7 @@ GuestTexture* GetGuestTexture(uint32_t address, uint32_t width, uint32_t height,
   t.height = height;
   t.guest_format = guest_format;
   t.format = desc.Format;
+  t.scale = scale;
   REXLOG_INFO("NATIVE-RT new resolve target {:08X} {}x{} guest fmt={}", address, width, height,
               guest_format);
   return &t;
@@ -612,8 +647,8 @@ void QueueReadback(GuestTexture& t, const uint8_t* base, uint32_t dest) {
     dl::TextureDesc desc;
     desc.Name = "ResolveReadback";
     desc.Type = dl::RESOURCE_DIM_TEX_2D;
-    desc.Width = HostX(t.width);
-    desc.Height = HostY(t.height);
+    desc.Width = t.scale.X(t.width);
+    desc.Height = t.scale.Y(t.height);
     desc.Format = t.format;
     desc.Usage = dl::USAGE_STAGING;
     desc.CPUAccessFlags = dl::CPU_ACCESS_READ;
@@ -650,7 +685,7 @@ void FinishReadbacks(const uint8_t* base) {
     for (uint32_t y = 0; y < t.height; ++y) {
       const auto* row = reinterpret_cast<const uint32_t*>(
           static_cast<const uint8_t*>(mapped.pData) +
-          size_t(std::min(uint32_t((y + 0.5f) * g_scale_y), HostY(t.height) - 1)) *
+          size_t(std::min(uint32_t((y + 0.5f) * t.scale.y), t.scale.Y(t.height) - 1)) *
               mapped.Stride);
       for (uint32_t x = 0; x < t.width; ++x) {
         uint32_t offset;
@@ -663,7 +698,7 @@ void FinishReadbacks(const uint8_t* base) {
                                      int32_t(x), int32_t(y), pitch, 2))
                                : (y * pitch + x) * 4;
         }
-        uint32_t texel = row[std::min(uint32_t((x + 0.5f) * g_scale_x), HostX(t.width) - 1)];
+        uint32_t texel = row[std::min(uint32_t((x + 0.5f) * t.scale.x), t.scale.X(t.width) - 1)];
         if (t.rb_swap) texel = (texel & 0xFF00FF00u) | ((texel >> 16) & 0xFF) | ((texel & 0xFF) << 16);
         uint32_t value = rex::graphics::xenos::GpuSwap(texel, fetch.endianness);
         std::memcpy(memory + key.address + offset, &value, 4);
@@ -834,7 +869,23 @@ DrawTargets BoundTargets(const uint8_t* base, uint32_t dev) {
   }
   SurfaceDesc ds;
   if (ReadSurface(base, Load32(base, dev + kDevDepthStencil), true, ds)) {
+    RtKey key{ds.base_tile, ds.pitch, ds.format, true};
+    if (!t.color_count && ds.width == ds.height && g_shadow_factor != 1.0f &&
+        g_shadow_rts.insert(key).second) {
+      REXLOG_INFO("NATIVE-RT shadow map: depth base={} pitch={} {}x{}", ds.base_tile, ds.pitch,
+                  ds.width, ds.height);
+    }
     if (HostRt* rt = GetRt(ds)) {
+      if (!t.color_count) {
+        t.scale_x = rt->scale.x;
+        t.scale_y = rt->scale.y;
+      } else if (!(rt->scale == Scale{g_scale_x, g_scale_y})) {
+        static bool reported = false;
+        if (!reported) {
+          reported = true;
+          REXLOG_WARN("NATIVE-RT shadow map base={} used with color targets", ds.base_tile);
+        }
+      }
       t.depth = rt->texture->GetDefaultView(dl::TEXTURE_VIEW_DEPTH_STENCIL);
       t.depth_format = rt->format;
       if (!t.width) {
@@ -1145,6 +1196,7 @@ bool StartDanteDevice(rex::ui::Window* window) {
   g_device = std::move(device);
   g_scale_x = scale.x;
   g_scale_y = scale.y;
+  g_shadow_factor = float(std::clamp(REXCVAR_GET(dante_shadow_scale), 1, 4));
   REXLOG_INFO("DanteDevice: resolution scale {:.3f} x {:.3f} ({}x{}, display aspect {:.4f})",
               g_scale_x, g_scale_y, HostX(1280), HostY(720), scale.display_aspect);
   g_shaders = std::make_unique<ShaderCache>(g_device->renderDevice(), g_scale_x, g_scale_y);
@@ -1170,6 +1222,7 @@ void StopDanteDevice() {
   std::lock_guard lock(g_mutex);
   if (!g_device) return;
   g_rts.clear();
+  g_shadow_rts.clear();
   g_textures.clear();
   g_readback_fence.Release();
   g_readback_value = 0;
@@ -1287,7 +1340,8 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       depth = dest_fetch.size_3d.depth + 1;
       slice = std::min(a.r[6], depth - 1);
     }
-    GuestTexture* t = GetGuestTexture(address, width, height, guest_format, depth ? slice + 1 : 0);
+    GuestTexture* t =
+        GetGuestTexture(address, width, height, guest_format, depth ? slice + 1 : 0, rt->scale);
     if (t) {
       t->depth = depth;
       t->slice = slice;
@@ -1315,12 +1369,12 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
       y2 = std::min({y2, rt->height, y1 + (t->height - std::min(dst_y, t->height))});
       if (x2 > x1 && y2 > y1) {
-        dl::Box box(HostX(x1), HostX(x2), HostY(y1), HostY(y2));
+        dl::Box box(rt->scale.X(x1), rt->scale.X(x2), rt->scale.Y(y1), rt->scale.Y(y2));
         dl::CopyTextureAttribs copy(rt->texture, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                                     t->texture, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         copy.pSrcBox = &box;
-        copy.DstX = HostX(dst_x);
-        copy.DstY = HostY(dst_y);
+        copy.DstX = t->scale.X(dst_x);
+        copy.DstY = t->scale.Y(dst_y);
         // The source is usually still bound as the render target.
         g_device->immediateContext()->SetRenderTargets(0, nullptr, nullptr,
                                                        dl::RESOURCE_STATE_TRANSITION_MODE_NONE);
@@ -1333,8 +1387,8 @@ void DanteOnResolve(const CallArgs& a, const uint8_t* base) {
       x2 = std::min({x2, rt->width, x1 + (t->width - std::min(dst_x, t->width))});
       y2 = std::min({y2, rt->height, y1 + (t->height - std::min(dst_y, t->height))});
       if (x2 > x1 && y2 > y1) {
-        CopyDepth(*rt, t->texture, HostX(x1), HostY(y1), HostX(x2), HostY(y2), HostX(dst_x),
-                  HostY(dst_y));
+        CopyDepth(*rt, t->texture, rt->scale.X(x1), rt->scale.Y(y1), rt->scale.X(x2),
+                  rt->scale.Y(y2), t->scale.X(dst_x), t->scale.Y(dst_y));
         result = "depth-copied";
       }
     } else if (t) {

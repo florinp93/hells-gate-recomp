@@ -143,6 +143,13 @@ namespace DantesInferno
             set { Set("anisotropic_override", Math.Max(-1, Math.Min(16, value))); }
         }
 
+        // Shadow map resolution relative to the frame's: 1, 2 or 4.
+        public int ShadowScale
+        {
+            get { return DisplayOptions.NormalizeShadowScale(Get("shadow_scale", DisplayOptions.DefaultShadowScale)); }
+            set { Set("shadow_scale", DisplayOptions.NormalizeShadowScale(value)); }
+        }
+
         public bool Smaa
         {
             get { return Get("smaa", true); }
