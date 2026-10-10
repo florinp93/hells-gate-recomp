@@ -27,6 +27,8 @@ WizardStyle=modern
 PrivilegesRequired=admin
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
+; Updates (launcher "Download & Install") reuse the installed folder.
+DisableDirPage=auto
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 SetupIconFile=icon.ico
@@ -46,7 +48,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Port binaries (from the C++ build)
 Source: "..\out\build\win-amd64-release\dantes_inferno.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\out\build\win-amd64-release\dantes_inferno_native.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\rexruntime.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\rexgpu-xenos.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\amd_fidelityfx_dx12.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -66,10 +67,6 @@ Source: "banner.jpg"; DestDir: "{app}"; Flags: ignoreversion
 
 ; ISO extraction tool (bundled, used post-install)
 Source: "..\tools\extract-xiso\extract-xiso.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
-
-; Pre-generated shader caches — seeded into the user shader storage on first
-; launch so the startup preload runs instead of mid-game shader compilation.
-Source: "..\packaging\shader_cache\*"; DestDir: "{app}\shader_cache"; Flags: ignoreversion
 
 ; NOTE: Game data (game/) is NOT included — the user provides their own ISO
 ; and the post-install step extracts it.
@@ -93,6 +90,12 @@ Filename: "{tmp}\extract-xiso.exe"; Parameters: "-x -d ""{app}\game"" -s ""{code
 
 ; Launch the launcher after install
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Dante's Inferno Launcher"; Flags: postinstall nowait skipifsilent
+
+[InstallDelete]
+; Left by earlier versions: the SDK Vulkan build and the D3D12 renderer's
+; shader caches, unused by the native renderer.
+Type: files; Name: "{app}\dantes_inferno_native.exe"
+Type: filesandordirs; Name: "{app}\shader_cache"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\game"
@@ -158,6 +161,17 @@ end;
 function GetIsoPath(Param: string): string;
 begin
   Result := IsoPage.Values[0];
+end;
+
+function GameDataPresent: Boolean;
+begin
+  Result := FileExists(AddBackslash(WizardDirValue) + 'game\default.xex');
+end;
+
+{ Updates and reinstalls keep the extracted game: no ISO needed. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = IsoPage.ID) and GameDataPresent;
 end;
 
 function NeedsExtraction: Boolean;
@@ -245,13 +259,7 @@ begin
     begin
       SaveStringToFile(ConfigPath,
         'game_data_root = "' + ExpandConstant('{app}\game') + '"' + #13#10 +
-        'render_target_path_d3d12 = "rov"' + #13#10 +
-        'renderer = "native"' + #13#10 +
-        'log_level = "off"' + #13#10 +
-        'resolution_scale = 1' + #13#10 +
-        'swap_post_effect = "none"' + #13#10 +
         'anisotropic_override = -1' + #13#10 +
-        'vsync = true' + #13#10 +
         'fullscreen = true' + #13#10 +
         'input_backend = "sdl"' + #13#10 +
         'dlc_source_path = "' + ExpandConstant('{app}\dlc') + '"' + #13#10,

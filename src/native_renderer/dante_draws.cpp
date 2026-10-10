@@ -1,5 +1,6 @@
 #include "dante_draws.h"
 
+#include "dante_stats.h"
 #include "dante_textures.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
@@ -429,6 +430,7 @@ Pipeline* DrawRenderer::Impl::GetPipeline(const PipelineKey& key, const DrawShad
                       : ds.FrontFace;
   }
   device->CreateGraphicsPipelineState(ci, &p.pso);
+  ++g_dante_stats.pipelines_created;
   if (!p.pso) {
     if (++pipeline_failures <= 8) {
       REXLOG_WARN("NATIVE-DRAW: pipeline failed VS {:016X} PS {:016X} topology {}",

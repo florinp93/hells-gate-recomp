@@ -118,16 +118,23 @@ namespace DantesInferno
             set { this["game_data_root"] = value; }
         }
 
-        public string Resolution
+        // "WIDTHxHEIGHT"; empty = the display's resolution.
+        public string RenderResolution
         {
-            get { return this["resolution"] ?? "1080p"; }
-            set { this["resolution"] = value; }
+            get { return this["render_resolution"] ?? ""; }
+            set { this["render_resolution"] = value; }
         }
 
-        public int ResolutionScale
+        public string Aspect
         {
-            get { return Get("resolution_scale", 1); }
-            set { Set("resolution_scale", Math.Max(0, Math.Min(8, value))); }
+            get { return DisplayOptions.NormalizeAspect(this["aspect"]); }
+            set { this["aspect"] = DisplayOptions.NormalizeAspect(value); }
+        }
+
+        public int FrameRate
+        {
+            get { return DisplayOptions.NormalizeFrameRate(Get("frame_rate", DisplayOptions.DefaultFrameRate)); }
+            set { Set("frame_rate", DisplayOptions.NormalizeFrameRate(value)); }
         }
 
         public int AnisotropicOverride
@@ -136,52 +143,16 @@ namespace DantesInferno
             set { Set("anisotropic_override", Math.Max(-1, Math.Min(16, value))); }
         }
 
-        public string SwapPostEffect
-        {
-            get { return this["swap_post_effect"] ?? "none"; }
-            set { this["swap_post_effect"] = value; }
-        }
-
-        public string PresentEffect
-        {
-            get { return this["present_effect"] ?? "bilinear"; }
-            set { this["present_effect"] = value; }
-        }
-
-        public bool PresentDither
-        {
-            get { return Get("present_dither", false); }
-            set { Set("present_dither", value); }
-        }
-
         public bool ShowFpsOverlay
         {
             get { return Get("show_fps_overlay", false); }
             set { Set("show_fps_overlay", value); }
         }
 
-        public string VulkanRenderPath
-        {
-            get { return this["render_target_path_vulkan"] ?? ""; }
-            set { this["render_target_path_vulkan"] = value; }
-        }
-
-        public bool VSync
-        {
-            get { return Get("vsync", true); }
-            set { Set("vsync", value); }
-        }
-
         public bool Fullscreen
         {
             get { return Get("fullscreen", true); }
             set { Set("fullscreen", value); }
-        }
-
-        public string RenderTargetPath
-        {
-            get { return this["render_target_path_d3d12"] ?? "rov"; }
-            set { this["render_target_path_d3d12"] = value; }
         }
 
         public string InputBackend
@@ -196,22 +167,19 @@ namespace DantesInferno
             set { this["glyph_family"] = value; }
         }
 
-        public string LogLevel
+        // The game always logs at info level; this adds debug detail.
+        public bool DetailedLogging
         {
-            get { return this["log_level"] ?? "off"; }
-            set { this["log_level"] = value; }
+            get { return Get("detailed_logging", false); }
+            set { Set("detailed_logging", value); }
         }
 
-        public string AspectRatio
+        // Hidden troubleshooting fallback: "xenos" runs the SDK's D3D12
+        // renderer instead of the native one. Not shown in the launcher.
+        public string RendererOverride
         {
-            get { return this["aspect_ratio"] ?? "native"; }
-            set { this["aspect_ratio"] = value; }
-        }
-
-        public string Renderer
-        {
-            get { return this["renderer"] ?? DisplayOptions.RendererNative; }
-            set { this["renderer"] = value; }
+            get { return this["renderer_override"] ?? ""; }
+            set { this["renderer_override"] = value; }
         }
 
         public uint UserLanguage
@@ -263,31 +231,22 @@ namespace DantesInferno
             return !string.IsNullOrEmpty(key) && _values.ContainsKey(key);
         }
 
+        // Settings of the old renderers and display modes, dropped from the config.
+        private static readonly string[] LegacyKeys =
+        {
+            "aspect_ratio", "resolution", "resolution_scale", "renderer",
+            "render_target_path_vulkan", "render_target_path_d3d12", "swap_post_effect",
+            "present_effect", "present_dither", "vsync", "log_level",
+        };
+
         public bool MigrateLegacySettings()
         {
             bool changed = false;
-
-            if (Remove("aspect_ratio"))
-                changed = true;
-            if (Remove("resolution"))
-                changed = true;
-
-            int rawScale = Get("resolution_scale", DisplayOptions.MinScale);
-            int clampedScale = DisplayOptions.ClampScale(rawScale);
-            if (!ContainsKey("resolution_scale") || rawScale != clampedScale ||
-                this["resolution_scale"] != clampedScale.ToString(CultureInfo.InvariantCulture))
+            foreach (string key in LegacyKeys)
             {
-                ResolutionScale = clampedScale;
-                changed = true;
+                if (Remove(key))
+                    changed = true;
             }
-
-            string renderer = DisplayOptions.NormalizeRenderer(this["renderer"]);
-            if (!ContainsKey("renderer") || this["renderer"] != renderer)
-            {
-                Renderer = renderer;
-                changed = true;
-            }
-
             return changed;
         }
     }

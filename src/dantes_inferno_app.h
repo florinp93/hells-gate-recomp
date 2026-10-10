@@ -14,6 +14,7 @@
 #include <rex/system/xam/content_manager.h>
 #include <rex/logging/macros.h>
 
+#include "session_info.h"
 #include "native_renderer/dante_device.h"
 #include "native_renderer/dante_graphics_system.h"
 
@@ -255,6 +256,7 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    session_info::Log();
     dante::ApplyDanteRendererConfig();
     if (rex::cvar::Query<std::string>("renderer") == "dante") {
       native::StartDanteDevice(window());

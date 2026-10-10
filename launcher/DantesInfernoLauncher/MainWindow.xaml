@@ -224,10 +224,6 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="180" />
@@ -238,37 +234,29 @@
                                     <TextBlock x:Name="DetectedDisplayText" Grid.Row="0" Grid.Column="1" Margin="2,6" TextWrapping="Wrap" Opacity="0.85" />
 
                                     <Label x:Name="LabelResolution" Grid.Row="1" Grid.Column="0" Content="Resolution:" />
-                                    <ComboBox x:Name="ResolutionCombo" Grid.Row="1" Grid.Column="1" Margin="0,2" ToolTip="Internal render resolution. 'Auto' scales to match your display height. Other values are display-equivalent; the game renders at 16:9 pixels and is stretched to your monitor's aspect ratio." />
+                                    <ComboBox x:Name="ResolutionCombo" Grid.Row="1" Grid.Column="1" Margin="0,2" IsEditable="True" />
 
-                                    <Label x:Name="LabelRenderer" Grid.Row="2" Grid.Column="0" Content="Renderer:" />
-                                    <ComboBox x:Name="RendererCombo" Grid.Row="2" Grid.Column="1" Margin="0,2" ToolTip="ReXGlue = plugin D3D12 renderer. Native = in-process Vulkan xenos renderer." />
+                                    <Label x:Name="LabelAspectRatio" Grid.Row="2" Grid.Column="0" Content="Aspect Ratio:" />
+                                    <ComboBox x:Name="AspectCombo" Grid.Row="2" Grid.Column="1" Margin="0,2" />
 
-                                    <Label x:Name="LabelRenderAccuracy" Grid.Row="3" Grid.Column="0" Content="Render Accuracy:" />
-                                    <ComboBox x:Name="RenderAccuracyCombo" Grid.Row="3" Grid.Column="1" Margin="0,2" ToolTip="Native Vulkan only. 'Automatic' uses host render targets (fast). 'EDRAM (FSI)' emulates the Xbox 360 EDRAM with fragment-shader interlock (slower, more accurate)." />
+                                    <Label x:Name="LabelFrameRate" Grid.Row="3" Grid.Column="0" Content="Frame Rate:" />
+                                    <ComboBox x:Name="FrameRateCombo" Grid.Row="3" Grid.Column="1" Margin="0,2" />
 
-                                    <Label x:Name="LabelAntiAliasing" Grid.Row="4" Grid.Column="0" Content="Anti-Aliasing:" />
-                                    <ComboBox x:Name="AAModeCombo" Grid.Row="4" Grid.Column="1" Margin="0,2" />
+                                    <Label x:Name="LabelTextureFiltering" Grid.Row="4" Grid.Column="0" Content="Texture Filtering:" />
+                                    <ComboBox x:Name="AnisoCombo" Grid.Row="4" Grid.Column="1" Margin="0,2" />
 
-                                    <Label x:Name="LabelPostProcessing" Grid.Row="5" Grid.Column="0" Content="Post-Processing:" />
-                                    <ComboBox x:Name="PostProcessingCombo" Grid.Row="5" Grid.Column="1" Margin="0,2" ToolTip="Output effect applied when presenting. CAS = contrast-adaptive sharpening. FSR EASU = upscaling. FSR RCAS = extra sharpener." />
-
-                                    <Label x:Name="LabelTextureFiltering" Grid.Row="6" Grid.Column="0" Content="Texture Filtering:" />
-                                    <ComboBox x:Name="AnisoCombo" Grid.Row="6" Grid.Column="1" Margin="0,2" />
-
-                                    <Label x:Name="LabelGameLanguage" Grid.Row="7" Grid.Column="0" Content="Game Language:" />
-                                    <ComboBox x:Name="LanguageCombo" Grid.Row="7" Grid.Column="1" Margin="0,2"
+                                    <Label x:Name="LabelGameLanguage" Grid.Row="5" Grid.Column="0" Content="Game Language:" />
+                                    <ComboBox x:Name="LanguageCombo" Grid.Row="5" Grid.Column="1" Margin="0,2"
                                               ToolTip="Game language. Detected from the XEX game region. English is always available." />
 
-                                    <Label x:Name="LabelLauncherLanguage" Grid.Row="8" Grid.Column="0" Content="Launcher Language:" />
-                                    <ComboBox x:Name="LauncherLanguageCombo" Grid.Row="8" Grid.Column="1" Margin="0,2"
+                                    <Label x:Name="LabelLauncherLanguage" Grid.Row="6" Grid.Column="0" Content="Launcher Language:" />
+                                    <ComboBox x:Name="LauncherLanguageCombo" Grid.Row="6" Grid.Column="1" Margin="0,2"
                                               ToolTip="Language for the launcher interface."
                                               SelectionChanged="LauncherLanguageCombo_SelectionChanged" />
 
-                                    <StackPanel Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
                                         <CheckBox x:Name="FullscreenCheck" Content="Fullscreen" Margin="0,0,15,0" />
-                                        <CheckBox x:Name="VSyncCheck" Content="VSync" Margin="0,0,15,0" />
-                                        <CheckBox x:Name="FpsOverlayCheck" Content="FPS Overlay" Margin="0,0,15,0" />
-                                        <CheckBox x:Name="DitherCheck" Content="Dither" Margin="0" />
+                                        <CheckBox x:Name="FpsOverlayCheck" Content="FPS Overlay" Margin="0" />
                                     </StackPanel>
                                 </Grid>
                             </GroupBox>
@@ -291,7 +279,7 @@
                                         <TextBlock x:Name="ComingSoonText" Grid.Column="2" Text="Coming soon" FontSize="11" FontStyle="Italic" Opacity="0.5" VerticalAlignment="Center" Margin="8,0,0,0" />
                                     </Grid>
 
-                                    <CheckBox x:Name="LoggingEnabledCheck" Content="Enable logging (for crash reports)" IsChecked="False" Margin="0,3" />
+                                    <CheckBox x:Name="LoggingEnabledCheck" Content="Detailed logging (troubleshooting; larger log files)" IsChecked="False" Margin="0,3" />
                                 </StackPanel>
                             </GroupBox>
 

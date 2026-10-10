@@ -47,6 +47,9 @@ set(DANTESINFERNO_SOURCES
 if(WIN32)
     list(APPEND DANTESINFERNO_SOURCES src/dantes_inferno.rc)
     add_executable(dantes_inferno WIN32 ${DANTESINFERNO_SOURCES})
+    # A PDB in every build, so crash reports' addresses map to function names
+    # (archived per release, not shipped).
+    target_link_options(dantes_inferno PRIVATE "LINKER:/DEBUG")
 else()
     add_executable(dantes_inferno ${DANTESINFERNO_SOURCES})
 endif()

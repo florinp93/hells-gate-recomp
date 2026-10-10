@@ -3,6 +3,7 @@
 #include "dante_draws.h"
 #include "dante_dump.h"
 #include "dante_shaders.h"
+#include "dante_stats.h"
 #include "dante_textures.h"
 #include "gpu_state.h"
 #include "native_device.h"
@@ -28,6 +29,7 @@
 #include <rex/ui/window.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 
@@ -35,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -206,8 +209,13 @@ struct RenderScale {
 };
 
 // Render scale from dante_resolution ('WxH' / 'auto') or dante_resolution_scale.
-// With the game's ultrawide_target_aspect set, the 1280x720 guest targets are
-// rendered anamorphically: height from the resolution, width = height * aspect.
+// The picture aspect is ultrawide_target_aspect, or the resolution's when 0;
+// the picture fills the largest box of that aspect within the resolution.
+// 4:3 (or narrower) uses the game's own standard-definition mode, chosen from
+// a 640x480 video mode: UI laid out for 4:3, 3D still rendered into the 16:9
+// 1280x720 targets and squeezed to 4:3 like the console's scaler. Wider than
+// 16:9 sets the game's display aspect. Both are rendered anamorphically.
+// Aspects between 4:3 and 16:9 stay 16:9, letterboxed.
 RenderScale ComputeRenderScale(rex::ui::Window* window) {
   std::string mode = REXCVAR_GET(dante_resolution);
   uint32_t width = 0, height = 0;
@@ -224,37 +232,27 @@ RenderScale ComputeRenderScale(rex::ui::Window* window) {
   }
   RenderScale scale;
   double aspect = rex::cvar::Query<double>("ultrawide_target_aspect");
-  // 4:3 (or narrower): the game's own standard-definition mode, chosen from a
-  // 640x480 video mode: UI laid out for 4:3, 3D still rendered into the 16:9
-  // 1280x720 targets and squeezed to 4:3 like the console's scaler, so the
-  // scale is anamorphic.
-  if (aspect <= 0.0 && width && height && double(width) / height <= 4.0 / 3.0 + 0.01) {
+  if (aspect <= 0.0) aspect = width && height ? double(width) / height : 16.0 / 9.0;
+  // Height of the picture's box within the resolution.
+  auto box_height = [&](double box_aspect) {
+    if (width && height) return float(std::min(double(height), width / box_aspect));
+    return 720.0f * float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+  };
+  if (aspect <= 4.0 / 3.0 + 0.01) {
     rex::cvar::SetFlagByName("video_mode_width", "640");
     rex::cvar::SetFlagByName("video_mode_height", "480");
-    float out_height = std::min(float(height), width * 3.0f / 4.0f);
-    scale.y = std::max(1.0f, out_height / 720.0f);
+    rex::cvar::SetFlagByName("ultrawide_target_aspect", "0");
+    scale.y = std::max(1.0f, box_height(4.0 / 3.0) / 720.0f);
     scale.x = std::max(1.0f, scale.y * 0.75f);
     scale.display_aspect = 4.0 / 3.0;
-    return scale;
-  }
-  // Wider than 16:9 sets the game's display aspect (anamorphic below). Aspects
-  // between 4:3 and 16:9 stay 16:9, letterboxed.
-  if (aspect <= 0.0 && width && height && double(width) / height > 16.0 / 9.0 + 0.01) {
-    aspect = double(width) / height;
+  } else if (aspect > 16.0 / 9.0 + 0.01) {
     rex::cvar::SetFlagByName("ultrawide_target_aspect", fmt::format("{:.4f}", aspect));
-  }
-  if (aspect > 0.0) {
-    float out_height = height ? float(height)
-                              : 720.0f * float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
-    scale.y = std::max(1.0f, out_height / 720.0f);
+    scale.y = std::max(1.0f, box_height(aspect) / 720.0f);
     scale.x = std::max(1.0f, float(720.0 * scale.y * aspect) / 1280.0f);
     scale.display_aspect = aspect;
-    return scale;
-  }
-  if (width && height) {
-    scale.x = scale.y = std::max(1.0f, std::min(width / 1280.0f, height / 720.0f));
   } else {
-    scale.x = scale.y = float(std::clamp(REXCVAR_GET(dante_resolution_scale), 1, 4));
+    rex::cvar::SetFlagByName("ultrawide_target_aspect", "0");
+    scale.x = scale.y = std::max(1.0f, box_height(16.0 / 9.0) / 720.0f);
   }
   return scale;
 }
@@ -1034,6 +1032,62 @@ void ReplayDump() {
   REXLOG_INFO("NATIVE-REPLAY: {} frames written to {}", r.count, dir.string());
 }
 
+// Performance log: a summary every 30 s and a line per slow frame, with the
+// shaders and pipelines compiled in it (stutter vs GPU load).
+constexpr double kPerfWindowSeconds = 30.0;
+constexpr float kSlowFrameMs = 50.0f;
+constexpr uint32_t kSlowFramesLoggedPerWindow = 20;
+
+struct PerfWindow {
+  std::chrono::steady_clock::time_point start{}, last_swap{};
+  std::vector<float> frame_ms;
+  uint32_t slow_frames = 0;
+  DanteStats at_start{}, at_last_swap{};
+};
+PerfWindow g_perf;
+
+void PerfOnSwap(uint32_t draws, uint32_t resolves) {
+  using Clock = std::chrono::steady_clock;
+  PerfWindow& p = g_perf;
+  const DanteStats& stats = g_dante_stats;
+  Clock::time_point now = Clock::now();
+  if (p.start == Clock::time_point{}) {
+    p.start = p.last_swap = now;
+    p.at_start = p.at_last_swap = stats;
+    return;
+  }
+  float ms = std::chrono::duration<float, std::milli>(now - p.last_swap).count();
+  p.last_swap = now;
+  p.frame_ms.push_back(ms);
+  uint64_t shaders = stats.shaders_compiled - p.at_last_swap.shaders_compiled;
+  uint64_t pipelines = stats.pipelines_created - p.at_last_swap.pipelines_created;
+  p.at_last_swap = stats;
+  if (ms > kSlowFrameMs && ++p.slow_frames <= kSlowFramesLoggedPerWindow) {
+    REXLOG_INFO("PERF slow frame f{}: {:.1f} ms, {} shaders and {} pipelines compiled, {} draws, "
+                "{} resolves",
+                g_frame, ms, shaders, pipelines, draws, resolves);
+  }
+  double seconds = std::chrono::duration<double>(now - p.start).count();
+  if (seconds < kPerfWindowSeconds) return;
+  std::vector<float> sorted = p.frame_ms;
+  std::sort(sorted.begin(), sorted.end(), std::greater<float>());
+  // 1% low: the average frame rate of the slowest 1% of frames.
+  size_t slowest = std::max<size_t>(1, sorted.size() / 100);
+  double slowest_ms = 0.0;
+  for (size_t i = 0; i < slowest; ++i) slowest_ms += sorted[i];
+  slowest_ms /= double(slowest);
+  REXLOG_INFO("PERF last {:.0f} s: {} frames, avg {:.1f} fps, 1% low {:.1f} fps, worst {:.1f} ms, "
+              "{} frames over {:.0f} ms; compiled {} shaders, {} pipelines (total {}, {})",
+              seconds, sorted.size(), sorted.size() / seconds, 1000.0 / slowest_ms, sorted.front(),
+              p.slow_frames, kSlowFrameMs, stats.shaders_compiled - p.at_start.shaders_compiled,
+              stats.pipelines_created - p.at_start.pipelines_created, stats.shaders_compiled,
+              stats.pipelines_created);
+  p.start = now;
+  p.frame_ms.clear();
+  p.slow_frames = 0;
+  p.at_start = stats;
+}
+
 dl::ITextureView* FrontBufferView(dl::ITexture* texture, uint32_t swizzle) {
   uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(texture)) ^ (uint64_t(swizzle) << 52);
   auto it = g_front_views.find(key);
@@ -1073,6 +1127,14 @@ bool StartDanteDevice(rex::ui::Window* window) {
     REXLOG_ERROR("DanteDevice: native device initialization failed");
     return false;
   }
+  const dl::GraphicsAdapterInfo& adapter = device->renderDevice()->GetAdapterInfo();
+  const dl::RenderDeviceInfo& device_info = device->renderDevice()->GetDeviceInfo();
+  REXLOG_INFO("DanteDevice: GPU {} (vendor {:04X} device {:04X}, {} MB VRAM), Vulkan {}.{}",
+              adapter.Description, adapter.VendorId, adapter.DeviceId,
+              // CPU-visible VRAM (Resizable BAR) is reported as unified memory.
+              (adapter.Memory.LocalMemory + adapter.Memory.UnifiedMemory) >> 20,
+              device_info.APIVersion.Major,
+              device_info.APIVersion.Minor);
   RenderScale scale = ComputeRenderScale(window);
   device->setDisplayAspect(scale.display_aspect, true);
   g_device = std::move(device);
@@ -1440,6 +1502,7 @@ void DanteOnSwap(const CallArgs& a, const uint8_t* base, bool log_next_frame) {
     rex::cvar::SetFlagByName("dante_replay_dump", "false");
     ReplayDump();
   }
+  PerfOnSwap(g_swap_draws, g_swap_resolves);
   g_swap_draws = g_swap_resolves = g_swap_dest_info_missing = g_swap_new_targets = 0;
   if (g_dump_frame && found) {
     DumpTexturePng(g_device->renderDevice(), g_device->immediateContext(), it->second.texture,

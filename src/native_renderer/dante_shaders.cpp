@@ -1,6 +1,7 @@
 #include "dante_shaders.h"
 
 #include "dante_dump.h"
+#include "dante_stats.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
@@ -175,6 +176,7 @@ struct ShaderCache::Impl {
     }
     if (result) {
       ++translated;
+      ++g_dante_stats.shaders_compiled;
     } else {
       ++failed;
       REXLOG_WARN("NATIVE-SH {} {:016X} mod {:016X} failed ({})", is_vertex ? "VS" : "PS", hash,

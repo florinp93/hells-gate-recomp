@@ -101,6 +101,7 @@ launcher_test/
 launcher-release/
 alpha-release/
 beta-release/
+release-symbols/
 
 # --- Source icon assets (keep ICO, ignore PNG source) ---
 !launcher/icon.ico

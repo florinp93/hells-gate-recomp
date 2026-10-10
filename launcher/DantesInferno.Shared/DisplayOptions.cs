@@ -9,40 +9,116 @@ namespace DantesInferno
     {
         public string Name { get; set; }
         public double Value { get; set; }
-        public bool IsNative { get; set; }
         public int DetectedWidth { get; set; }
         public int DetectedHeight { get; set; }
+        public int RefreshRate { get; set; }
     }
 
-    public class DisplayModeOption
+    public class AspectOption
     {
         public string Label { get; set; }
-        public int Scale { get; set; }
-        public int Width { get; set; }
-        public int Height { get; set; }
+        public string Key { get; set; }
+        public double Value { get; set; }
+    }
+
+    public class FrameRateOption
+    {
+        public string Label { get; set; }
+        public int Value { get; set; }
     }
 
     public static class DisplayOptions
     {
-        public const int GuestBaseHeight = 720;
-        public const int MinScale = 0; // 0 = auto (native_render_scale)
-        public const int MaxScale = 3;
-        public const double NativeAspect = 1.7778;
+        public const string AspectAuto = "auto";
+        public const int DefaultFrameRate = 120;
+        public const int MinResolution = 320;
+        public const int MaxResolution = 16384;
 
-        public const string RendererNative = "native";
-        public const string RendererReXGlue = "xenos";
+        // Multiples of 60: the game's UI updates at 60 Hz.
+        public static readonly int[] FrameRates = { 60, 120, 180, 240 };
+
+        public static readonly List<AspectOption> AspectOptions = new List<AspectOption>
+        {
+            new AspectOption { Label = "Auto (match resolution)", Key = AspectAuto, Value = 0 },
+            new AspectOption { Label = "4:3", Key = "4:3", Value = 4.0 / 3.0 },
+            new AspectOption { Label = "16:9", Key = "16:9", Value = 16.0 / 9.0 },
+            new AspectOption { Label = "21:9", Key = "21:9", Value = 64.0 / 27.0 },
+            new AspectOption { Label = "32:9", Key = "32:9", Value = 32.0 / 9.0 },
+        };
+
+        private static readonly int[,] CommonResolutions =
+        {
+            { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 },
+            { 1440, 1080 }, { 1600, 1200 }, { 1920, 1440 },
+            { 1920, 1200 }, { 2560, 1600 },
+            { 2560, 1080 }, { 3440, 1440 }, { 5120, 2160 },
+            { 3840, 1080 }, { 5120, 1440 },
+        };
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DEVMODE
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+            public short dmSpecVersion;
+            public short dmDriverVersion;
+            public short dmSize;
+            public short dmDriverExtra;
+            public int dmFields;
+            public int dmPositionX;
+            public int dmPositionY;
+            public int dmDisplayOrientation;
+            public int dmDisplayFixedOutput;
+            public short dmColor;
+            public short dmDuplex;
+            public short dmYResolution;
+            public short dmTTOption;
+            public short dmCollate;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+            public short dmLogPixels;
+            public int dmBitsPerPel;
+            public int dmPelsWidth;
+            public int dmPelsHeight;
+            public int dmDisplayFlags;
+            public int dmDisplayFrequency;
+            public int dmICMMethod;
+            public int dmICMIntent;
+            public int dmMediaType;
+            public int dmDitherType;
+            public int dmReserved1;
+            public int dmReserved2;
+            public int dmPanningWidth;
+            public int dmPanningHeight;
+        }
+
+        private const int ENUM_CURRENT_SETTINGS = -1;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
 
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
+        // Primary display mode in physical pixels, and its refresh rate.
         public static DisplayAspect DetectPrimaryAspect()
         {
             int width = 0;
             int height = 0;
+            int refresh = 0;
             try
             {
-                width = GetSystemMetrics(0);
-                height = GetSystemMetrics(1);
+                var mode = new DEVMODE();
+                mode.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+                if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref mode))
+                {
+                    width = mode.dmPelsWidth;
+                    height = mode.dmPelsHeight;
+                    refresh = mode.dmDisplayFrequency;
+                }
+                if (width <= 0 || height <= 0)
+                {
+                    width = GetSystemMetrics(0);
+                    height = GetSystemMetrics(1);
+                }
             }
             catch
             {
@@ -55,178 +131,184 @@ namespace DantesInferno
                 width = 1920;
                 height = 1080;
             }
-
-            var aspect = ClassifyAspect((double)width / height);
-            aspect.DetectedWidth = width;
-            aspect.DetectedHeight = height;
-            return aspect;
-        }
-
-        public static DisplayAspect ClassifyAspect(double rawAspect)
-        {
-            if (!(rawAspect > 0.1) || double.IsNaN(rawAspect) || double.IsInfinity(rawAspect))
-                rawAspect = NativeAspect;
-
-            var known = new List<DisplayAspect>
-            {
-                new DisplayAspect { Name = "4:3", Value = 1.3333, IsNative = false },
-                new DisplayAspect { Name = "16:10", Value = 1.6, IsNative = false },
-                new DisplayAspect { Name = "16:9", Value = NativeAspect, IsNative = true },
-                new DisplayAspect { Name = "21:9", Value = 2.3889, IsNative = false },
-                new DisplayAspect { Name = "32:9", Value = 3.5556, IsNative = false },
-            };
-
-            const double tolerance = 0.06;
-            foreach (var candidate in known)
-            {
-                if (Math.Abs(rawAspect - candidate.Value) <= tolerance)
-                    return new DisplayAspect
-                    {
-                        Name = candidate.Name,
-                        Value = candidate.Value,
-                        IsNative = candidate.IsNative,
-                    };
-            }
-
-            double clamped = rawAspect;
-            if (clamped < 1.3333) clamped = 1.3333;
-            if (clamped > 3.5556) clamped = 3.5556;
-            clamped = Math.Round(clamped, 4);
+            // 0 and 1 mean the hardware default.
+            if (refresh <= 1)
+                refresh = 60;
 
             return new DisplayAspect
             {
-                Name = "Custom (" + clamped.ToString("0.####", CultureInfo.InvariantCulture) + ":1)",
-                Value = clamped,
-                IsNative = Math.Abs(clamped - NativeAspect) <= 0.0002,
+                Name = AspectName((double)width / height),
+                Value = (double)width / height,
+                DetectedWidth = width,
+                DetectedHeight = height,
+                RefreshRate = refresh,
             };
         }
 
-        public static List<DisplayModeOption> BuildResolutionOptions(DisplayAspect aspect)
+        public static string AspectName(double aspect)
         {
-            var options = new List<DisplayModeOption>();
-            if (aspect == null)
-                aspect = ClassifyAspect(NativeAspect);
-
-            options.Add(new DisplayModeOption
+            var named = new[]
             {
-                Label = "Auto (match display height)",
-                Scale = 0,
-                Width = 0,
-                Height = 0,
-            });
-
-            for (int scale = 1; scale <= MaxScale; scale++)
+                new KeyValuePair<string, double>("5:4", 1.25),
+                new KeyValuePair<string, double>("4:3", 4.0 / 3.0),
+                new KeyValuePair<string, double>("16:10", 1.6),
+                new KeyValuePair<string, double>("16:9", 16.0 / 9.0),
+                new KeyValuePair<string, double>("21:9", 2.3889),
+                new KeyValuePair<string, double>("32:9", 32.0 / 9.0),
+            };
+            foreach (var n in named)
             {
-                int height = GuestBaseHeight * scale;
-                int width = RoundToEven(aspect.Value * height);
-                string suffix;
-                if (scale == 1)
-                    suffix = "1x (original)";
-                else if (scale == 2)
-                    suffix = "2x";
-                else
-                    suffix = scale + "x (4K class)";
+                if (Math.Abs(aspect - n.Value) <= 0.03)
+                    return n.Key;
+            }
+            return aspect.ToString("0.##", CultureInfo.InvariantCulture) + ":1";
+        }
 
-                options.Add(new DisplayModeOption
-                {
-                    Label = string.Format(CultureInfo.InvariantCulture, "{0}x{1} - {2}", width, height, suffix),
-                    Scale = scale,
-                    Width = width,
-                    Height = height,
-                });
+        public static string FormatResolution(int width, int height)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0}x{1}", width, height);
+        }
+
+        public static string NativeResolution(DisplayAspect display)
+        {
+            return FormatResolution(display.DetectedWidth, display.DetectedHeight);
+        }
+
+        // "WIDTHxHEIGHT" (x, X, * or ×; spaces allowed).
+        public static bool TryParseResolution(string text, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+            var parts = text.Replace(" ", "").Split('x', 'X', '*', '×');
+            if (parts.Length != 2)
+                return false;
+            if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out width) ||
+                !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out height))
+                return false;
+            return width >= MinResolution && height >= MinResolution &&
+                   width <= MaxResolution && height <= MaxResolution;
+        }
+
+        // The display's own resolution first, then common ones.
+        public static List<string> BuildResolutionOptions(DisplayAspect display)
+        {
+            var options = new List<string>();
+            options.Add(NativeResolution(display));
+            for (int i = 0; i < CommonResolutions.GetLength(0); i++)
+            {
+                string r = FormatResolution(CommonResolutions[i, 0], CommonResolutions[i, 1]);
+                if (!options.Contains(r))
+                    options.Add(r);
             }
             return options;
         }
 
-        public static int RoundToEven(double value)
+        // Highest frame rate the display shows: above its refresh rate the
+        // driver can hold presents to the refresh and slow the game down.
+        // 59.94 Hz modes report 59.
+        public static int MaxFrameRate(DisplayAspect display)
         {
-            int rounded = (int)Math.Round(value, MidpointRounding.AwayFromZero);
-            if ((rounded & 1) != 0)
-                rounded += 1;
-            return rounded;
-        }
-
-        public static int ClampScale(int scale)
-        {
-            if (scale < MinScale) return MinScale;
-            if (scale > MaxScale) return MaxScale;
-            return scale;
-        }
-
-        public static string NormalizePresentEffect(string effect)
-        {
-            if (string.IsNullOrWhiteSpace(effect))
-                return "bilinear";
-            string lowered = effect.ToLowerInvariant();
-            switch (lowered)
+            int refresh = display != null ? display.RefreshRate : 60;
+            int max = FrameRates[0];
+            foreach (int r in FrameRates)
             {
-                case "bilinear":
-                case "bilinear_dither":
-                case "cas_sharpen":
-                case "cas_sharpen_dither":
-                case "cas_resample":
-                case "cas_resample_dither":
-                case "fsr_easu":
-                case "fsr_rcas":
-                case "fsr_rcas_dither":
-                    return lowered;
-                // Friendly aliases mapped to concrete cvar values
-                case "cas": return "cas_sharpen";
-                case "fsr": return "fsr_easu";
-                default:
-                    return "bilinear";
+                if (r <= refresh + 1)
+                    max = r;
             }
+            return max;
         }
 
-        public static string NormalizeRenderer(string renderer)
+        public static List<FrameRateOption> BuildFrameRateOptions(DisplayAspect display)
         {
-            if (!string.IsNullOrEmpty(renderer) &&
-                renderer.Equals(RendererNative, StringComparison.OrdinalIgnoreCase))
-                return RendererNative;
-            return RendererReXGlue;
+            int max = MaxFrameRate(display);
+            var options = new List<FrameRateOption>();
+            foreach (int rate in FrameRates)
+            {
+                if (rate <= max)
+                    options.Add(new FrameRateOption { Label = rate + " FPS", Value = rate });
+            }
+            return options;
         }
 
-        public static string FormatAspectValue(double value)
+        // The nearest supported frame rate.
+        public static int NormalizeFrameRate(int rate)
         {
-            return value.ToString("0.####", CultureInfo.InvariantCulture);
+            int best = DefaultFrameRate;
+            int bestDistance = int.MaxValue;
+            foreach (int r in FrameRates)
+            {
+                int distance = Math.Abs(r - rate);
+                if (distance < bestDistance)
+                {
+                    best = r;
+                    bestDistance = distance;
+                }
+            }
+            return best;
         }
 
-        public static string BuildLaunchArguments(GameConfig config, string gameDataRoot, DisplayAspect aspect)
+        // The configured frame rate, limited to what the display shows.
+        public static int FrameRateFor(GameConfig config, DisplayAspect display)
+        {
+            return Math.Min(NormalizeFrameRate(config.FrameRate), MaxFrameRate(display));
+        }
+
+        public static string NormalizeAspect(string key)
+        {
+            foreach (var option in AspectOptions)
+            {
+                if (option.Key.Equals(key ?? "", StringComparison.OrdinalIgnoreCase))
+                    return option.Key;
+            }
+            return AspectAuto;
+        }
+
+        public static bool IsRendererFallback(GameConfig config)
+        {
+            return config.RendererOverride.Equals("xenos", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string BuildLaunchArguments(GameConfig config, string gameDataRoot, DisplayAspect display)
         {
             if (config == null)
                 throw new ArgumentNullException("config");
-            if (aspect == null)
-                aspect = ClassifyAspect(NativeAspect);
-
-            bool loggingEnabled = !config.LogLevel.Equals("off", StringComparison.OrdinalIgnoreCase);
-            string renderer = NormalizeRenderer(config.Renderer);
+            if (display == null)
+                display = DetectPrimaryAspect();
 
             var args = new List<string>();
             args.Add(string.Format("--game_data_root=\"{0}\"", gameDataRoot));
 
-            args.Add("--render_target_path_d3d12=rov");
-
-            int scale = ClampScale(config.ResolutionScale);
-            if (scale == 0)
-                args.Add("--native_render_scale=auto");
-            else if (scale > 1)
-                args.Add(string.Format(CultureInfo.InvariantCulture, "--resolution_scale={0}", scale));
-
-            args.Add("--renderer=" + renderer);
-
-            if (!string.IsNullOrEmpty(config.VulkanRenderPath) &&
-                renderer == RendererNative)
+            if (IsRendererFallback(config))
             {
-                args.Add(string.Format("--render_target_path_vulkan={0}", config.VulkanRenderPath));
+                args.Add("--renderer=xenos");
+                args.Add("--render_target_path_d3d12=rov");
+                args.Add("--native_render_scale=auto");
+            }
+            else
+            {
+                args.Add("--renderer=dante");
+                int width, height;
+                string resolution = TryParseResolution(config.RenderResolution, out width, out height)
+                    ? FormatResolution(width, height)
+                    : NativeResolution(display);
+                args.Add("--dante_resolution=" + resolution);
             }
 
-            if (!string.IsNullOrEmpty(config.SwapPostEffect) && config.SwapPostEffect != "none")
-                args.Add(string.Format("--swap_post_effect={0}", config.SwapPostEffect));
+            string aspect = NormalizeAspect(config.Aspect);
+            foreach (var option in AspectOptions)
+            {
+                if (option.Key == aspect && option.Value > 0)
+                    args.Add(string.Format(CultureInfo.InvariantCulture,
+                        "--ultrawide_target_aspect={0:0.####}", option.Value));
+            }
 
-            args.Add(string.Format("--present_effect={0}", NormalizePresentEffect(config.PresentEffect)));
-
-            if (config.PresentDither)
-                args.Add("--present_dither=true");
+            // The game paces to its vblank, which follows the video mode's
+            // refresh rate; vsync keeps that vblank running at that rate.
+            args.Add(string.Format(CultureInfo.InvariantCulture,
+                "--video_mode_refresh_rate={0}", FrameRateFor(config, display)));
+            args.Add("--vsync=true");
 
             if (config.ShowFpsOverlay)
                 args.Add("--show_fps_overlay=true");
@@ -234,19 +316,14 @@ namespace DantesInferno
             if (config.AnisotropicOverride >= 0)
                 args.Add(string.Format(CultureInfo.InvariantCulture, "--anisotropic_override={0}", config.AnisotropicOverride));
 
-            args.Add(string.Format("--vsync={0}", config.VSync.ToString().ToLowerInvariant()));
-            args.Add(string.Format("--d3d12_host_vsync={0}", config.VSync.ToString().ToLowerInvariant()));
-            args.Add("--video_mode_refresh_rate=60");
-
             args.Add(string.Format("--fullscreen={0}", config.Fullscreen.ToString().ToLowerInvariant()));
 
             args.Add("--input_backend=" + config.InputBackend);
 
-            if (!aspect.IsNative)
-                args.Add(string.Format(CultureInfo.InvariantCulture,
-                    "--ultrawide_target_aspect={0}", FormatAspectValue(aspect.Value)));
-
-            args.Add(loggingEnabled ? "--log_level=info" : "--log_level=off");
+            // Logs are always written, flushed every 2 s so a freeze or a
+            // killed process still leaves them complete.
+            args.Add(config.DetailedLogging ? "--log_level=debug" : "--log_level=info");
+            args.Add("--log_flush_interval=2");
 
             if (config.GlyphFamily.Equals("playstation", StringComparison.OrdinalIgnoreCase))
                 args.Add("--glyph_family=playstation");
