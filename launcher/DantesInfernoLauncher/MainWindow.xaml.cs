@@ -16,9 +16,13 @@ namespace DantesInferno.Launcher
         private string _installDir;
         private bool _gameRunning;
         private DisplayAspect _displayAspect;
-        private List<DisplayModeOption> _resolutionOptions;
+        private List<string> _resolutionOptions;
         private string _launcherLanguage = LauncherLocalizer.DefaultLanguage;
         private bool _populatingLauncherLanguage;
+
+        private const string IssuesUrl = "https://github.com/florinp93/hells-gate-recomp/issues";
+        // Texture filtering choices; index 0 ("Default") leaves the game's own.
+        private static readonly int[] AnisoLevels = { 0, 1, 2, 4, 8, 16 };
 
         public MainWindow()
         {
@@ -49,10 +53,7 @@ namespace DantesInferno.Launcher
                 if (release.Version <= localVersion)
                     return;
 
-                var asset = release.Assets.FirstOrDefault(
-                    a => a.Name.Equals("DantesInfernoInstaller.exe",
-                        StringComparison.OrdinalIgnoreCase));
-                if (asset == null)
+                if (FindInstallerAsset(release) == null)
                     return;
 
                 Dispatcher.Invoke(new Action(() =>
@@ -118,83 +119,79 @@ namespace DantesInferno.Launcher
                 _displayAspect = DisplayOptions.DetectPrimaryAspect();
 
             DetectedDisplayText.Text = string.Format(CultureInfo.InvariantCulture,
-                "{0}x{1} detected ({2})",
-                _displayAspect.DetectedWidth, _displayAspect.DetectedHeight, _displayAspect.Name);
+                "{0}x{1} @ {2} Hz detected ({3})",
+                _displayAspect.DetectedWidth, _displayAspect.DetectedHeight, _displayAspect.RefreshRate,
+                _displayAspect.Name);
 
             _resolutionOptions = DisplayOptions.BuildResolutionOptions(_displayAspect);
             ResolutionCombo.ItemsSource = _resolutionOptions;
-            ResolutionCombo.DisplayMemberPath = "Label";
-            int scale = DisplayOptions.ClampScale(_config.ResolutionScale);
-            int scaleIndex = _resolutionOptions.FindIndex(o => o.Scale == scale);
-            ResolutionCombo.SelectedIndex = scaleIndex < 0 ? 0 : scaleIndex;
+            int width, height;
+            ResolutionCombo.Text = DisplayOptions.TryParseResolution(_config.RenderResolution, out width, out height)
+                ? DisplayOptions.FormatResolution(width, height)
+                : DisplayOptions.NativeResolution(_displayAspect);
 
-            var rendererOptions = new List<KeyValuePair<string, string>>
-            {
-                new KeyValuePair<string, string>("ReXGlue (D3D12)", DisplayOptions.RendererReXGlue),
-                new KeyValuePair<string, string>("Native (Vulkan)", DisplayOptions.RendererNative),
-            };
-            RendererCombo.ItemsSource = rendererOptions;
-            RendererCombo.DisplayMemberPath = "Key";
-            RendererCombo.SelectedValuePath = "Value";
-            string renderer = DisplayOptions.NormalizeRenderer(_config.Renderer);
-            RendererCombo.SelectedIndex = renderer == DisplayOptions.RendererNative ? 1 : 0;
+            AspectCombo.ItemsSource = DisplayOptions.AspectOptions;
+            AspectCombo.DisplayMemberPath = "Label";
+            AspectCombo.SelectedValuePath = "Key";
+            AspectCombo.SelectedValue = _config.Aspect;
 
-            var accuracyOptions = new List<KeyValuePair<string, string>>
-            {
-                new KeyValuePair<string, string>("Automatic (host render targets)", ""),
-                new KeyValuePair<string, string>("EDRAM (FSI)", "fsi"),
-            };
-            RenderAccuracyCombo.ItemsSource = accuracyOptions;
-            RenderAccuracyCombo.DisplayMemberPath = "Key";
-            RenderAccuracyCombo.SelectedValuePath = "Value";
-            string accuracy = _config.VulkanRenderPath ?? "";
-            int accuracyIndex = accuracyOptions.FindIndex(o => o.Value == accuracy);
-            RenderAccuracyCombo.SelectedIndex = accuracyIndex < 0 ? 0 : accuracyIndex;
-
-            AAModeCombo.ItemsSource = new List<string> { "Off", "FXAA", "FXAA Extreme" };
-            switch (_config.SwapPostEffect)
-            {
-                case "none": AAModeCombo.SelectedIndex = 0; break;
-                case "fxaa": AAModeCombo.SelectedIndex = 1; break;
-                case "fxaa_extreme": AAModeCombo.SelectedIndex = 2; break;
-                default: AAModeCombo.SelectedIndex = 0; break;
-            }
-
-            var postProcessingOptions = new List<KeyValuePair<string, string>>
-            {
-                new KeyValuePair<string, string>("Bilinear (default)", "bilinear"),
-                new KeyValuePair<string, string>("CAS (sharpen)", "cas_sharpen"),
-                new KeyValuePair<string, string>("FSR EASU (upscale)", "fsr_easu"),
-                new KeyValuePair<string, string>("FSR RCAS (sharpen)", "fsr_rcas"),
-            };
-            PostProcessingCombo.ItemsSource = postProcessingOptions;
-            PostProcessingCombo.DisplayMemberPath = "Key";
-            PostProcessingCombo.SelectedValuePath = "Value";
-            string presentEffect = DisplayOptions.NormalizePresentEffect(_config.PresentEffect);
-            int ppIndex = postProcessingOptions.FindIndex(o => o.Value == presentEffect);
-            PostProcessingCombo.SelectedIndex = ppIndex < 0 ? 0 : ppIndex;
+            FrameRateCombo.ItemsSource = DisplayOptions.BuildFrameRateOptions(_displayAspect);
+            FrameRateCombo.DisplayMemberPath = "Label";
+            FrameRateCombo.SelectedValuePath = "Value";
+            FrameRateCombo.SelectedValue = DisplayOptions.FrameRateFor(_config, _displayAspect);
 
             AnisoCombo.ItemsSource = new List<string> { "Default", "1x", "2x", "4x", "8x", "16x" };
-            int aniso = _config.AnisotropicOverride;
-            if (aniso < 0) aniso = 0;
-            else aniso = Array.IndexOf(new[] { 0, 1, 2, 4, 8, 16 }, aniso);
-            if (aniso < 0) aniso = 0;
-            AnisoCombo.SelectedIndex = aniso;
+            int aniso = _config.AnisotropicOverride < 0
+                ? 0 : Array.IndexOf(AnisoLevels, _config.AnisotropicOverride);
+            AnisoCombo.SelectedIndex = Math.Max(aniso, 0);
+
+            PopulateShadowCombo(_config.ShadowScale);
 
             FullscreenCheck.IsChecked = _config.Fullscreen;
-            VSyncCheck.IsChecked = _config.VSync;
+            SmaaCheck.IsChecked = _config.Smaa;
             FpsOverlayCheck.IsChecked = _config.ShowFpsOverlay;
-            DitherCheck.IsChecked = _config.PresentDither;
 
             ControllerFixCheck.IsChecked = _config.InputBackend.Equals("sdl", StringComparison.OrdinalIgnoreCase);
 
-            GlyphFamilyCombo.SelectedIndex = _config.GlyphFamily.Equals("playstation", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            PopulateGlyphCombo(_config.GlyphFamily);
 
-            LoggingEnabledCheck.IsChecked = !_config.LogLevel.Equals("off", StringComparison.OrdinalIgnoreCase);
+            LoggingEnabledCheck.IsChecked = _config.DetailedLogging;
 
             PopulateLanguageCombo();
             PopulateLauncherLanguageCombo();
             PopulateKeybinds();
+        }
+
+        private void PopulateShadowCombo(int selected)
+        {
+            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
+            var items = new List<KeyValuePair<int, string>>
+            {
+                new KeyValuePair<int, string>(1, Lt(LauncherLocalizer.ShadowOriginal)),
+                new KeyValuePair<int, string>(2, Lt(LauncherLocalizer.ShadowHigh)),
+                new KeyValuePair<int, string>(4, Lt(LauncherLocalizer.ShadowUltra)),
+            };
+            ShadowCombo.ItemsSource = items;
+            ShadowCombo.DisplayMemberPath = "Value";
+            ShadowCombo.SelectedValuePath = "Key";
+            ShadowCombo.SelectedValue = DisplayOptions.NormalizeShadowScale(selected);
+        }
+
+        private void PopulateGlyphCombo(string selected)
+        {
+            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
+            var items = new List<KeyValuePair<string, string>>
+            {
+                new KeyValuePair<string, string>("auto", Lt(LauncherLocalizer.GlyphAuto)),
+                new KeyValuePair<string, string>("xbox360", Lt(LauncherLocalizer.GlyphXbox)),
+                new KeyValuePair<string, string>("playstation4", Lt(LauncherLocalizer.GlyphPlayStation4)),
+                new KeyValuePair<string, string>("playstation5", Lt(LauncherLocalizer.GlyphPlayStation5)),
+                new KeyValuePair<string, string>("keyboard", Lt(LauncherLocalizer.GlyphKeyboard)),
+            };
+            GlyphFamilyCombo.ItemsSource = items;
+            GlyphFamilyCombo.DisplayMemberPath = "Value";
+            GlyphFamilyCombo.SelectedValuePath = "Key";
+            GlyphFamilyCombo.SelectedValue = items.Exists(i => i.Key == selected) ? selected : "auto";
         }
 
         private void PopulateLauncherLanguageCombo()
@@ -297,23 +294,30 @@ namespace DantesInferno.Launcher
             GroupGraphics.Header = Lt(LauncherLocalizer.GroupGraphics);
             LabelDisplay.Content = Lt(LauncherLocalizer.LabelDisplay);
             LabelResolution.Content = Lt(LauncherLocalizer.LabelResolution);
-            LabelRenderer.Content = Lt(LauncherLocalizer.LabelRenderer);
-            LabelAntiAliasing.Content = Lt(LauncherLocalizer.LabelAntiAliasing);
+            LabelAspectRatio.Content = Lt(LauncherLocalizer.LabelAspectRatio);
+            LabelFrameRate.Content = Lt(LauncherLocalizer.LabelFrameRate);
             LabelTextureFiltering.Content = Lt(LauncherLocalizer.LabelTextureFiltering);
             LabelGameLanguage.Content = Lt(LauncherLocalizer.LabelGameLanguage);
             LabelLauncherLanguage.Content = Lt(LauncherLocalizer.LabelLauncherLanguage);
             FullscreenCheck.Content = Lt(LauncherLocalizer.CheckFullscreen);
+            SmaaCheck.Content = Lt(LauncherLocalizer.CheckSmaa);
+            SmaaCheck.ToolTip = Lt(LauncherLocalizer.SmaaTooltip);
+            LabelShadowQuality.Content = Lt(LauncherLocalizer.LabelShadowQuality);
+            ShadowCombo.ToolTip = Lt(LauncherLocalizer.ShadowTooltip);
+            PopulateShadowCombo(ShadowCombo.SelectedValue is int shadow ? shadow : _config.ShadowScale);
             GroupControlsSettings.Header = Lt(LauncherLocalizer.GroupControls);
             ControllerFixCheck.Content = Lt(LauncherLocalizer.CheckControllerBackend);
             ControllerFixCheck.ToolTip = Lt(LauncherLocalizer.ControllerTooltip);
             LabelButtonGlyphs.Text = Lt(LauncherLocalizer.LabelButtonGlyphs);
-            ComingSoonText.Text = Lt(LauncherLocalizer.ComingSoon);
+            GlyphFamilyCombo.ToolTip = Lt(LauncherLocalizer.GlyphTooltip);
+            PopulateGlyphCombo(GlyphFamilyCombo.SelectedValue as string ?? _config.GlyphFamily);
             LoggingEnabledCheck.Content = Lt(LauncherLocalizer.CheckLogging);
             SettingsAppliedNoteText.Text = Lt(LauncherLocalizer.SettingsAppliedNote);
             ApplyRecommendedButton.Content = Lt(LauncherLocalizer.ResetToRecommended);
             SaveSettingsButton.Content = Lt(LauncherLocalizer.SaveSettings);
             ResolutionCombo.ToolTip = Lt(LauncherLocalizer.ResolutionTooltip);
-            RendererCombo.ToolTip = Lt(LauncherLocalizer.RendererTooltip);
+            AspectCombo.ToolTip = Lt(LauncherLocalizer.AspectTooltip);
+            FrameRateCombo.ToolTip = Lt(LauncherLocalizer.FrameRateTooltip);
             LanguageCombo.ToolTip = Lt(LauncherLocalizer.LanguageGameTooltip);
             LauncherLanguageCombo.ToolTip = Lt(LauncherLocalizer.LanguageLauncherTooltip);
 
@@ -505,8 +509,11 @@ namespace DantesInferno.Launcher
             if (File.Exists(exePath) && Directory.Exists(gameData))
                 PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusReady);
             else
-                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, "play_status_missing");
+                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusMissing);
         }
+
+        // Logs kept from earlier sessions; the session being started adds one.
+        private const int KeptLogFiles = 9;
 
         private void ClearOldLogs()
         {
@@ -516,7 +523,10 @@ namespace DantesInferno.Launcher
                 if (!Directory.Exists(logsDir))
                     return;
 
-                foreach (var file in Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories))
+                var old = Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories)
+                    .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+                    .Skip(KeptLogFiles);
+                foreach (var file in old)
                 {
                     try { File.Delete(file); } catch { }
                 }
@@ -524,57 +534,46 @@ namespace DantesInferno.Launcher
             catch { }
         }
 
-        private void SaveSettingsToConfig()
+        // False (with a message) when the typed resolution is not WIDTHxHEIGHT.
+        private bool SaveSettingsToConfig()
         {
-            var selectedMode = ResolutionCombo.SelectedItem as DisplayModeOption;
-            _config.ResolutionScale = selectedMode != null
-                ? DisplayOptions.ClampScale(selectedMode.Scale)
-                : DisplayOptions.MinScale;
-
-            var rendererPair = RendererCombo.SelectedItem as KeyValuePair<string, string>?;
-            _config.Renderer = DisplayOptions.NormalizeRenderer(
-                rendererPair.HasValue ? rendererPair.Value.Value : null);
-
-            var accuracyPair = RenderAccuracyCombo.SelectedItem as KeyValuePair<string, string>?;
-            _config.VulkanRenderPath = accuracyPair.HasValue ? accuracyPair.Value.Value : "";
-
-            int aaIdx = AAModeCombo.SelectedIndex;
-            switch (aaIdx)
+            int width, height;
+            if (!DisplayOptions.TryParseResolution(ResolutionCombo.Text, out width, out height))
             {
-                case 1: _config.SwapPostEffect = "fxaa"; break;
-                case 2: _config.SwapPostEffect = "fxaa_extreme"; break;
-                default: _config.SwapPostEffect = "none"; break;
+                MessageBox.Show(string.Format(CultureInfo.InvariantCulture,
+                        "'{0}' is not a resolution. Use WIDTHxHEIGHT, for example 2560x1440 ({1} to {2} pixels per side).",
+                        ResolutionCombo.Text, DisplayOptions.MinResolution, DisplayOptions.MaxResolution),
+                    "Resolution", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
             }
+            _config.RenderResolution = DisplayOptions.FormatResolution(width, height);
+            ResolutionCombo.Text = _config.RenderResolution;
 
-            var postProcessingPair = PostProcessingCombo.SelectedItem as KeyValuePair<string, string>?;
-            _config.PresentEffect = postProcessingPair.HasValue ? postProcessingPair.Value.Value : "bilinear";
+            _config.Aspect = AspectCombo.SelectedValue as string;
+            if (FrameRateCombo.SelectedValue is int frameRate)
+                _config.FrameRate = frameRate;
 
-            _config.PresentDither = DitherCheck.IsChecked ?? false;
             _config.ShowFpsOverlay = FpsOverlayCheck.IsChecked ?? false;
+            _config.Smaa = SmaaCheck.IsChecked ?? true;
+            if (ShadowCombo.SelectedValue is int shadowScale)
+                _config.ShadowScale = shadowScale;
 
             int anisoIdx = AnisoCombo.SelectedIndex;
-            if (anisoIdx <= 0)
-                _config.AnisotropicOverride = -1;
-            else
-            {
-                int[] anisoValues = { 0, 1, 2, 4, 8, 16 };
-                _config.AnisotropicOverride = anisoValues[anisoIdx];
-            }
+            _config.AnisotropicOverride = anisoIdx <= 0 ? -1 : AnisoLevels[anisoIdx];
 
             _config.Fullscreen = FullscreenCheck.IsChecked ?? true;
-            _config.VSync = VSyncCheck.IsChecked ?? true;
 
             _config.InputBackend = (ControllerFixCheck.IsChecked ?? false) ? "sdl" : "xinput";
 
-            _config.GlyphFamily = GlyphFamilyCombo.SelectedIndex == 1 ? "playstation" : "xbox";
+            _config.GlyphFamily = GlyphFamilyCombo.SelectedValue as string ?? "auto";
 
-            bool loggingEnabled = LoggingEnabledCheck.IsChecked ?? true;
-            _config.LogLevel = loggingEnabled ? "info" : "off";
+            _config.DetailedLogging = LoggingEnabledCheck.IsChecked ?? false;
 
             if (LanguageCombo.SelectedValue is uint langId)
                 _config.UserLanguage = langId;
 
             _config["dlc_source_path"] = PathHelper.GetDlcPath(_installDir);
+            return true;
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -586,13 +585,6 @@ namespace DantesInferno.Launcher
             }
 
             string exePath = PathHelper.GetGameExecutablePath(_installDir);
-            bool wantNative = DisplayOptions.NormalizeRenderer(_config.Renderer) == DisplayOptions.RendererNative;
-            if (wantNative)
-            {
-                string nativeExe = PathHelper.GetNativeGameExecutablePath(_installDir);
-                if (File.Exists(nativeExe))
-                    exePath = nativeExe;
-            }
             if (!File.Exists(exePath))
             {
                 MessageBox.Show("dantes_inferno.exe was not found in the install directory.", "Missing Game", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -606,7 +598,8 @@ namespace DantesInferno.Launcher
                 return;
             }
 
-            SaveSettingsToConfig();
+            if (!SaveSettingsToConfig())
+                return;
             SaveKeybindsToConfig();
             _config.Save();
 
@@ -614,12 +607,10 @@ namespace DantesInferno.Launcher
 
             string arguments = DisplayOptions.BuildLaunchArguments(_config, gameData, _displayAspect);
 
-            var launchMode = ResolutionCombo.SelectedItem as DisplayModeOption;
-            string rendererName = DisplayOptions.NormalizeRenderer(_config.Renderer) == DisplayOptions.RendererNative
-                ? "Native (Vulkan)" : "ReXGlue (D3D12)";
-            PlayNoteText.Text = "Launching at " +
-                (launchMode != null ? launchMode.Width + "x" + launchMode.Height : "default resolution") +
-                " using " + rendererName + "...";
+            PlayNoteText.Text = DisplayOptions.IsRendererFallback(_config)
+                ? "Launching with the D3D12 fallback renderer (renderer_override)..."
+                : string.Format(CultureInfo.InvariantCulture, "Launching at {0}, {1} FPS...",
+                    _config.RenderResolution, DisplayOptions.FrameRateFor(_config, _displayAspect));
             PlayButton.IsEnabled = false;
             _gameRunning = true;
 
@@ -685,7 +676,7 @@ namespace DantesInferno.Launcher
             else
                 message += "No log file was found in " + logsDir + "\n\n";
             message += "Please report this on GitHub and attach the log file.\n";
-            message += "https://github.com/florinp93/dantes-inferno/issues\n\n";
+            message += IssuesUrl + "\n\n";
             message += "Click OK to open the log folder and the GitHub issues page.";
 
             var result = MessageBox.Show(message, "Game Crashed", MessageBoxButton.OKCancel, MessageBoxImage.Error);
@@ -702,7 +693,7 @@ namespace DantesInferno.Launcher
 
                 try
                 {
-                    Process.Start(new ProcessStartInfo("https://github.com/florinp93/dantes-inferno/issues") { UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(IssuesUrl) { UseShellExecute = true });
                 }
                 catch { }
             }
@@ -775,15 +766,13 @@ namespace DantesInferno.Launcher
 
         private void ApplyRecommended_Click(object sender, RoutedEventArgs e)
         {
-            _config.ResolutionScale = 0;
-            _config.Renderer = DisplayOptions.RendererNative;
-            _config.VulkanRenderPath = "";
-            _config.SwapPostEffect = "none";
-            _config.PresentEffect = "cas_sharpen";
-            _config.PresentDither = false;
+            _config.RenderResolution = DisplayOptions.NativeResolution(_displayAspect);
+            _config.Aspect = DisplayOptions.AspectAuto;
+            _config.FrameRate = Math.Min(DisplayOptions.DefaultFrameRate, DisplayOptions.MaxFrameRate(_displayAspect));
             _config.ShowFpsOverlay = false;
+            _config.Smaa = true;
+            _config.ShadowScale = DisplayOptions.DefaultShadowScale;
             _config.AnisotropicOverride = -1;
-            _config.VSync = true;
             _config.Fullscreen = true;
             _config.InputBackend = "sdl";
             PopulateControls();
@@ -793,7 +782,8 @@ namespace DantesInferno.Launcher
 
         private void SaveSettings_Click(object sender, RoutedEventArgs e)
         {
-            SaveSettingsToConfig();
+            if (!SaveSettingsToConfig())
+                return;
             _config.Save();
             RefreshPlayStatus();
             MessageBox.Show("Settings saved. They will be applied when you click PLAY.", "Saved",
@@ -801,6 +791,12 @@ namespace DantesInferno.Launcher
         }
 
         private ReleaseInfo _pendingUpdate;
+
+        private static ReleaseAsset FindInstallerAsset(ReleaseInfo release)
+        {
+            return release.Assets.FirstOrDefault(
+                a => a.Name.Equals("DantesInfernoInstaller.exe", StringComparison.OrdinalIgnoreCase));
+        }
 
         private void CheckUpdates_Click(object sender, RoutedEventArgs e)
         {
@@ -812,11 +808,7 @@ namespace DantesInferno.Launcher
                 var localVersion = GitHubUpdater.GetLocalVersion(_installDir);
                 if (release.Version > localVersion)
                 {
-                    var asset = release.Assets.FirstOrDefault(
-                        a => a.Name.Equals("DantesInfernoInstaller.exe",
-                            StringComparison.OrdinalIgnoreCase));
-
-                    if (asset != null)
+                    if (FindInstallerAsset(release) != null)
                     {
                         _pendingUpdate = release;
                         DownloadUpdateButton.Visibility = Visibility.Visible;
@@ -855,9 +847,7 @@ namespace DantesInferno.Launcher
                 return;
             }
 
-            var asset = _pendingUpdate.Assets.FirstOrDefault(
-                a => a.Name.Equals("DantesInfernoInstaller.exe",
-                    StringComparison.OrdinalIgnoreCase));
+            var asset = FindInstallerAsset(_pendingUpdate);
             if (asset == null)
             {
                 MessageBox.Show("The latest release has no installer asset to download.",

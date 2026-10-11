@@ -375,17 +375,9 @@ namespace DantesInferno.Installer
                 string configPath = Path.Combine(_destination, "dantes_inferno.toml");
                 var config = GameConfig.Load(configPath);
                 config.GameDataRoot = gameDir;
-                config.RenderTargetPath = "rov";
-                config.LogLevel = "off";
-                if (string.IsNullOrEmpty(config.Resolution))
-                    config.Resolution = "1080p";
-                if (config.ResolutionScale < 1)
-                    config.ResolutionScale = 1;
-                if (string.IsNullOrEmpty(config.SwapPostEffect))
-                    config.SwapPostEffect = "none";
+                config.MigrateLegacySettings();
                 if (config.AnisotropicOverride < -1)
                     config.AnisotropicOverride = -1;
-                config.VSync = true;
                 config.Fullscreen = true;
                 if (string.IsNullOrEmpty(config.InputBackend))
                     config.InputBackend = "sdl";

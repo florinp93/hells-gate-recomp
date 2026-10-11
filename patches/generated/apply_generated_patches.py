@@ -1,3 +1,13 @@
+"""Patches the generated recompiled code in generated/default. Run after every
+codegen, before building.
+
+1. Fibers: the guest setjmp/longjmp (found by function body, so both the base
+   and TU2 images work) become host setjmp/longjmp at every call site.
+2. Unresolved calls: REX_FATAL traps for branches the codegen didn't connect
+   become direct calls or gotos where the target is known; the rest are listed.
+3. Language fallback: a language missing from the game's tables falls back to
+   English.
+"""
 
 import os
 import re

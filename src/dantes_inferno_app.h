@@ -1,26 +1,28 @@
 #pragma once
 
-#include <rex/rex_app.h>
-#include <rex/cvar.h>
+#include "renderer/renderer.h"
+#include "renderer/renderer_config.h"
+#include "session_info.h"
+
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
-#include <rex/input/flags.h>
-#include <rex/ui/keybinds.h>
-#include <rex/ui/imgui_dialog.h>
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/graphics_system.h>
+#include <rex/input/flags.h>
+#include <rex/input/input_system.h>
+#include <rex/logging/macros.h>
+#include <rex/rex_app.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_manager.h>
-#include <rex/logging/macros.h>
-
-#include "native_renderer/dante_device.h"
-#include "native_renderer/dante_graphics_system.h"
+#include <rex/ui/imgui_dialog.h>
+#include <rex/ui/keybinds.h>
 
 #include <array>
 #include <chrono>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -35,7 +37,8 @@ REXCVAR_DEFINE_BOOL(show_fps_overlay, false, "UI",
                     "Show FPS and frametime overlay (top-left corner)");
 
 REXCVAR_DEFINE_STRING(glyph_family, "auto", "UI",
-                      "Button glyph family: auto, xbox, or playstation");
+                      "Button glyphs: auto (follow the controller in use), xbox360, playstation4, "
+                      "playstation5 or keyboard");
 
 REXCVAR_DEFINE_DOUBLE(ultrawide_target_aspect, 0.0, "Graphics",
                       "Target aspect ratio for ultrawide (0=disabled, 1.7778=16:9, "
@@ -67,17 +70,14 @@ class FpsOverlayDialog : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     auto now = std::chrono::steady_clock::now();
 
-    uint64_t current_guest_frames =
-        command_processor_ ? command_processor_->swap_counter() : 0;
-    uint64_t current_vblanks =
-        command_processor_ ? command_processor_->vblank_counter() : 0;
+    uint64_t current_guest_frames = command_processor_ ? command_processor_->swap_counter() : 0;
+    uint64_t current_vblanks = command_processor_ ? command_processor_->vblank_counter() : 0;
     window_frames_ += current_guest_frames - last_guest_frame_count_;
     window_vblanks_ += current_vblanks - last_vblank_count_;
     last_guest_frame_count_ = current_guest_frames;
     last_vblank_count_ = current_vblanks;
 
-    double window_ms =
-        std::chrono::duration<double, std::milli>(now - window_start_).count();
+    double window_ms = std::chrono::duration<double, std::milli>(now - window_start_).count();
     if (window_ms >= kWindowMs) {
       double guest_fps = window_frames_ * 1000.0 / window_ms;
       double guest_ft_ms = window_frames_ ? window_ms / window_frames_ : 0.0;
@@ -111,13 +111,12 @@ class FpsOverlayDialog : public rex::ui::ImGuiDialog {
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                         ImGuiWindowFlags_NoSavedSettings |
-                         ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
                          ImGuiWindowFlags_NoFocusOnAppearing)) {
       ImGui::SetWindowFontScale(2.0f);
-      ImU32 fps_color = smoothed_fps_ >= 55.0f ? IM_COL32(80, 255, 80, 255) :
-                       smoothed_fps_ >= 30.0f ? IM_COL32(255, 220, 60, 255) :
-                                                IM_COL32(255, 80, 80, 255);
+      ImU32 fps_color = smoothed_fps_ >= 55.0f   ? IM_COL32(80, 255, 80, 255)
+                        : smoothed_fps_ >= 30.0f ? IM_COL32(255, 220, 60, 255)
+                                                 : IM_COL32(255, 80, 80, 255);
       ImGui::PushStyleColor(ImGuiCol_Text, fps_color);
       ImGui::Text("%.0f FPS", smoothed_fps_);
       ImGui::PopStyleColor();
@@ -132,10 +131,8 @@ class FpsOverlayDialog : public rex::ui::ImGuiDialog {
       ImGui::PopStyleColor();
 
       ImGui::Spacing();
-      ImGui::PlotLines("##frametime", frame_history_.data(),
-                       static_cast<int>(kHistorySize),
-                       static_cast<int>(history_idx_), nullptr,
-                       0.0f, 50.0f, ImVec2(220, 50));
+      ImGui::PlotLines("##frametime", frame_history_.data(), static_cast<int>(kHistorySize),
+                       static_cast<int>(history_idx_), nullptr, 0.0f, 50.0f, ImVec2(220, 50));
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
@@ -161,15 +158,13 @@ class DantesInfernoApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
 
-  static std::unique_ptr<rex::ui::WindowedApp> Create(
-      rex::ui::WindowedAppContext& ctx) {
-    return std::unique_ptr<DantesInfernoApp>(new DantesInfernoApp(ctx, "dantes_inferno",
-        PPCImageConfig));
+  static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    return std::unique_ptr<DantesInfernoApp>(
+        new DantesInfernoApp(ctx, "dantes_inferno", PPCImageConfig));
   }
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
-    if (!paths.game_data_root.empty())
-      return;
+    if (!paths.game_data_root.empty()) return;
 
     const std::filesystem::path candidates[] = {
         rex::filesystem::GetExecutableFolder() / "game",
@@ -189,6 +184,7 @@ class DantesInfernoApp : public rex::ReXApp {
 
     REXCVAR_SET(input_backend, std::string("sdl"));
 
+    // Keyboard / mouse layout, unless the user or the launcher set one.
     auto keybind_default = [](const char* name, const char* value) {
       if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault) {
         rex::cvar::SetFlagByName(name, value);
@@ -234,6 +230,8 @@ class DantesInfernoApp : public rex::ReXApp {
   void OnPreLaunchModule() override {
     uint8_t* membase = runtime()->memory()->virtual_membase();
 
+    // The save system's setjmp must not switch fibers (dantes_inferno_hooks.h):
+    // clear the fiber-switch callback. TU2 is recognised by its setjmp.
     auto* dispatcher = runtime()->function_dispatcher();
     const bool is_tu2 = dispatcher && dispatcher->GetFunction(0x82879110);
     uint32_t slot = is_tu2 ? 0x82CE68E4u : 0x82B101E4u;
@@ -250,87 +248,144 @@ class DantesInfernoApp : public rex::ReXApp {
         REXLOG_INFO("DLC-MOD: dumped guest image to {}", dump_path.string());
       }
     }
-
-    SeedShaderStorage();
   }
 
   void OnPostSetup() override {
-    dante::ApplyDanteRendererConfig();
+    session_info::Log();
+    renderer::ConfigureSyncOnlyGpu();
     if (rex::cvar::Query<std::string>("renderer") == "dante") {
-      native::StartDanteDevice(window());
+      renderer::Start(window());
+      // renderer=dante sets the aspect from a resolution wider than 16:9.
+      g_ultrawide_target_aspect = static_cast<float>(REXCVAR_GET(ultrawide_target_aspect));
+      // Button glyphs follow the controller in use, unless glyph_family forces a set.
+      auto* input = dynamic_cast<rex::input::InputSystem*>(runtime()->input_system());
+      renderer::SetButtonGlyphStyleSource([input] {
+        using renderer::GlyphStyle;
+        std::string family = REXCVAR_GET(glyph_family);
+        if (family == "xbox360") return GlyphStyle::kXbox;
+        if (family == "playstation4") return GlyphStyle::kPlayStation4;
+        if (family == "playstation5") return GlyphStyle::kPlayStation5;
+        if (family == "keyboard") return GlyphStyle::kKeyboard;
+        if (!input) return GlyphStyle::kXbox;
+        switch (input->ActiveButtonLabels(0)) {
+          case rex::input::ButtonLabels::kPlayStation4: return GlyphStyle::kPlayStation4;
+          case rex::input::ButtonLabels::kPlayStation5: return GlyphStyle::kPlayStation5;
+          case rex::input::ButtonLabels::kKeyboard: return GlyphStyle::kKeyboard;
+          default: return GlyphStyle::kXbox;
+        }
+      });
+      // Keyboard glyphs show the live keybinds (the launcher and the settings
+      // overlay can change them).
+      renderer::SetButtonGlyphBindingsSource([] {
+        auto bind = [](const char* name) { return rex::cvar::Query<std::string>(name); };
+        renderer::KeyBindings k;
+        k.a = bind("keybind_a");
+        k.b = bind("keybind_b");
+        k.x = bind("keybind_x");
+        k.y = bind("keybind_y");
+        k.left_shoulder = bind("keybind_left_shoulder");
+        k.right_shoulder = bind("keybind_right_shoulder");
+        k.left_trigger = bind("keybind_left_trigger");
+        k.right_trigger = bind("keybind_right_trigger");
+        k.back = bind("keybind_back");
+        k.start = bind("keybind_start");
+        k.lstick_up = bind("keybind_lstick_up");
+        k.lstick_down = bind("keybind_lstick_down");
+        k.lstick_left = bind("keybind_lstick_left");
+        k.lstick_right = bind("keybind_lstick_right");
+        k.lstick_press = bind("keybind_lstick_press");
+        k.rstick_up = bind("keybind_rstick_up");
+        k.rstick_down = bind("keybind_rstick_down");
+        k.rstick_left = bind("keybind_rstick_left");
+        k.rstick_right = bind("keybind_rstick_right");
+        k.rstick_press = bind("keybind_rstick_press");
+        k.mouse_look = rex::cvar::Query<bool>("mnk_mouse");
+        return k;
+      });
     }
     rex::chrono::Clock::set_guest_time_scalar(REXCVAR_GET(time_scalar));
 
     rex::cvar::RegisterChangeCallback("time_scalar",
-        [](std::string_view, std::string_view new_value) {
-          double scalar = std::stod(std::string(new_value));
-          if (scalar < 0.0) scalar = 0.0;
-          rex::chrono::Clock::set_guest_time_scalar(scalar);
+                                      [](std::string_view, std::string_view new_value) {
+                                        double scalar = std::stod(std::string(new_value));
+                                        if (scalar < 0.0) scalar = 0.0;
+                                        rex::chrono::Clock::set_guest_time_scalar(scalar);
+                                      });
+
+    rex::cvar::RegisterChangeCallback(
+        "ultrawide_target_aspect", [](std::string_view, std::string_view new_value) {
+          g_ultrawide_target_aspect = static_cast<float>(std::stod(std::string(new_value)));
         });
 
-    rex::cvar::RegisterChangeCallback("ultrawide_target_aspect",
-        [](std::string_view, std::string_view new_value) {
-          g_ultrawide_target_aspect =
-              static_cast<float>(std::stod(std::string(new_value)));
-        });
-
-    rex::ui::RegisterBind("bind_exit_game", "Alt+F4",
-                          "Exit game to desktop", [this] {
-      app_context().RequestDeferredQuit();
-    });
+    rex::ui::RegisterBind("bind_exit_game", "Alt+F4", "Exit game to desktop",
+                          [this] { app_context().RequestDeferredQuit(); });
 
     saved_vsync_ = rex::cvar::Query<bool>("vsync");
 
     if (REXCVAR_GET(show_fps_overlay) && imgui_drawer()) {
-      fps_overlay_ = std::make_unique<FpsOverlayDialog>(imgui_drawer(),
-                                                        GetCommandProcessor());
+      fps_overlay_ = std::make_unique<FpsOverlayDialog>(imgui_drawer(), GetCommandProcessor());
     }
 
-    rex::ui::RegisterBind("bind_fps_overlay", "F1",
-                          "Toggle FPS overlay", [this] {
+    rex::ui::RegisterBind("bind_fps_overlay", "F1", "Toggle FPS overlay", [this] {
       if (fps_overlay_) {
         fps_overlay_.reset();
       } else if (imgui_drawer()) {
-        fps_overlay_ = std::make_unique<FpsOverlayDialog>(imgui_drawer(),
-                                                          GetCommandProcessor());
+        fps_overlay_ = std::make_unique<FpsOverlayDialog>(imgui_drawer(), GetCommandProcessor());
       }
     });
 
-    rex::ui::RegisterBind("bind_pass_trace", "F6",
-                          "Trace GPU passes for 5 seconds", [this] {
+    rex::ui::RegisterBind("bind_pass_trace", "F6", "Trace GPU passes for 5 seconds", [] {
       bool ok = rex::cvar::SetFlagByName("gpu_pass_trace_frames", "300");
       REXLOG_INFO("PASS-TRACE trigger: set={} value={}", ok,
                   rex::cvar::Query<int32_t>("gpu_pass_trace_frames"));
     });
 
-    rex::ui::RegisterBind("bind_d3d_trace", "F8",
-                          "Trace D3D API calls for 3 frames", [this] {
+    rex::ui::RegisterBind("bind_d3d_trace", "F8", "Trace D3D API calls for 3 frames", [] {
       bool ok = rex::cvar::SetFlagByName("d3d_trace_frames", "3");
       REXLOG_INFO("D3D-TRACE trigger: set={}", ok);
     });
 
-    rex::ui::RegisterBind("bind_host_rendering", "F10",
-                          "Toggle Xenos host rendering (sync keeps running)", [this] {
-      bool enable = !rex::cvar::Query<bool>("gpu_host_rendering");
-      bool ok = rex::cvar::SetFlagByName("gpu_host_rendering", enable ? "true" : "false");
-      REXLOG_INFO("gpu_host_rendering={} (set={})", enable, ok);
-    });
+    rex::ui::RegisterBind(
+        "bind_host_rendering", "F10", "Toggle Xenos host rendering (sync keeps running)", [] {
+          bool enable = !rex::cvar::Query<bool>("gpu_host_rendering");
+          bool ok = rex::cvar::SetFlagByName("gpu_host_rendering", enable ? "true" : "false");
+          REXLOG_INFO("gpu_host_rendering={} (set={})", enable, ok);
+        });
 
     rex::ui::RegisterBind("bind_dante_debug_view", "F11",
-                          "renderer=dante: cycle the presented render target", [this] {
-      int32_t view = (rex::cvar::Query<int32_t>("dante_debug_view") + 1) % 9;
-      rex::cvar::SetFlagByName("dante_debug_view", std::to_string(view));
-      REXLOG_INFO("dante_debug_view={}", view);
+                          "renderer=dante: cycle the presented render target", [] {
+                            int32_t view = (rex::cvar::Query<int32_t>("dante_debug_view") + 1) % 9;
+                            rex::cvar::SetFlagByName("dante_debug_view", std::to_string(view));
+                            REXLOG_INFO("dante_debug_view={}", view);
+                          });
+
+    rex::ui::RegisterBind("bind_rdoc_capture", "Insert",
+                          "Under RenderDoc: capture the next guest frames",
+                          [] { rex::cvar::SetFlagByName("rdoc_capture_frame", "true"); });
+
+    rex::ui::RegisterBind("bind_dante_smaa", "End", "renderer=dante: toggle SMAA", [] {
+      bool enabled = !rex::cvar::Query<bool>("dante_smaa");
+      rex::cvar::SetFlagByName("dante_smaa", enabled ? "true" : "false");
+      REXLOG_INFO("SMAA {}", enabled ? "on" : "off");
     });
 
-    rex::ui::RegisterBind("bind_native_observe", "F9",
-                          "M2 shadow observer for 3 frames", [this] {
-      bool ok = rex::cvar::SetFlagByName("native_observe_frames", "3");
+    rex::ui::RegisterBind("bind_dante_replay", "Home",
+                          "renderer=dante: save the instant replay (last 3 seconds)",
+                          [] { rex::cvar::SetFlagByName("dante_replay_dump", "true"); });
+
+    rex::ui::RegisterBind(
+        "bind_dante_record", "F5", "renderer=dante: record the next 3600 presented frames", [] {
+          bool start = rex::cvar::Query<int32_t>("dante_record_frames") == 0;
+          rex::cvar::SetFlagByName("dante_record_frames", start ? "3600" : "0");
+          REXLOG_INFO("dante_record_frames: {}", start ? "recording 3600 frames" : "stopped");
+        });
+
+    rex::ui::RegisterBind("bind_verify_gpu_state", "F9", "Verify the GPU state of 3 frames", [] {
+      bool ok = rex::cvar::SetFlagByName("verify_gpu_state_frames", "3");
       REXLOG_INFO("NATIVE-OBS trigger: set={}", ok);
     });
 
-    rex::ui::RegisterBind("bind_fast_forward", "F2",
-                          "Toggle 50x fast-forward", [this] {
+    rex::ui::RegisterBind("bind_fast_forward", "F2", "Toggle 50x fast-forward", [this] {
       double current = REXCVAR_GET(time_scalar);
       bool fast = current > 1.0;
       double target = fast ? 1.0 : 50.0;
@@ -362,8 +417,7 @@ class DantesInfernoApp : public rex::ReXApp {
     }
 
     auto is_hex_name = [](const std::string& s, size_t len) {
-      return s.size() == len &&
-             s.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
+      return s.size() == len && s.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
     };
 
     std::filesystem::path marker = root / ".installed";
@@ -397,16 +451,16 @@ class DantesInfernoApp : public rex::ReXApp {
       std::filesystem::path dest;
       if (is_hex_name(name, 16)) {
         dest = user_root / name;
-      } else if (is_hex_name(name, 8) &&
-                 std::filesystem::exists(entry.path() / "Headers")) {
+      } else if (is_hex_name(name, 8) && std::filesystem::exists(entry.path() / "Headers")) {
         dest = content_root / name;
       }
       if (!dest.empty()) {
         std::error_code ec;
         std::filesystem::create_directories(dest, ec);
         std::filesystem::copy(entry.path(), dest,
-            std::filesystem::copy_options::recursive |
-            std::filesystem::copy_options::update_existing, ec);
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::update_existing,
+                              ec);
         if (ec) {
           REXLOG_WARN("DLC content mirror failed for {}: {}", name, ec.message());
         } else {
@@ -448,13 +502,17 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
-    native::StopDanteDevice();
+    renderer::Stop();
     rex::ui::UnregisterBind("bind_fast_forward");
     rex::ui::UnregisterBind("bind_pass_trace");
     rex::ui::UnregisterBind("bind_d3d_trace");
-    rex::ui::UnregisterBind("bind_native_observe");
+    rex::ui::UnregisterBind("bind_verify_gpu_state");
     rex::ui::UnregisterBind("bind_host_rendering");
     rex::ui::UnregisterBind("bind_dante_debug_view");
+    rex::ui::UnregisterBind("bind_dante_record");
+    rex::ui::UnregisterBind("bind_dante_replay");
+    rex::ui::UnregisterBind("bind_dante_smaa");
+    rex::ui::UnregisterBind("bind_rdoc_capture");
     rex::ui::UnregisterBind("bind_fps_overlay");
     rex::ui::UnregisterBind("bind_exit_game");
     rex::cvar::UnregisterChangeCallbacks("time_scalar");
@@ -465,42 +523,10 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
  private:
-  void SeedShaderStorage() {
-    const std::filesystem::path bundled =
-        rex::filesystem::GetExecutableFolder() / "shader_cache";
-    std::error_code ec;
-    if (!std::filesystem::is_directory(bundled, ec) ||
-        runtime()->cache_root().empty()) {
-      return;
-    }
-    const std::filesystem::path shareable =
-        runtime()->cache_root() / "shaders" / "shareable";
-    std::filesystem::create_directories(shareable, ec);
-    uint32_t seeded = 0;
-    for (const auto& entry :
-         std::filesystem::directory_iterator(bundled, ec)) {
-      if (!entry.is_regular_file()) continue;
-      const std::filesystem::path dst = shareable / entry.path().filename();
-      if (std::filesystem::exists(dst, ec)) continue;
-      if (std::filesystem::copy_file(entry.path(), dst, ec) && !ec) {
-        ++seeded;
-      }
-    }
-    if (seeded) {
-      REXLOG_INFO("Seeded {} shader cache file(s) into {}", seeded,
-                  shareable.string());
-    }
-  }
-
   rex::graphics::CommandProcessor* GetCommandProcessor() {
-    auto* gfx_sys = runtime() ? runtime()->graphics_system() : nullptr;
-    if (auto* dante_sys =
-            dynamic_cast<dante::DanteGraphicsSystem*>(gfx_sys)) {
-      gfx_sys = dante_sys->inner();
-    }
-    auto* con_sys =
-        dynamic_cast<rex::graphics::GraphicsSystem*>(gfx_sys);
-    return con_sys ? con_sys->command_processor() : nullptr;
+    auto* graphics = dynamic_cast<rex::graphics::GraphicsSystem*>(
+        runtime() ? runtime()->graphics_system() : nullptr);
+    return graphics ? graphics->command_processor() : nullptr;
   }
 
   std::unique_ptr<FpsOverlayDialog> fps_overlay_;

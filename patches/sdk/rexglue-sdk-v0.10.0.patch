@@ -1186,13 +1186,18 @@ index 0d8f8af..a595861 100644
  
  rex_target_pch(rexgpu-xenos
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..f6314ab 100644
+index a744375..526ebe1 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -10,10 +10,12 @@
+@@ -10,10 +10,17 @@
   */
  
  #include <algorithm>
++#include <array>
++#include <chrono>
++#include <map>
++#include <string>
++#include <vector>
 +#include <atomic>
  #include <cinttypes>
  #include <cmath>
@@ -1202,7 +1207,7 @@ index a744375..f6314ab 100644
  
  #include <fmt/format.h>
  
-@@ -24,6 +26,7 @@
+@@ -24,6 +31,7 @@
  #include <rex/graphics/command_processor.h>
  #include <rex/graphics/flags.h>
  #include <rex/graphics/graphics_system.h>
@@ -1210,7 +1215,7 @@ index a744375..f6314ab 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/sampler_info.h>
  #include <rex/graphics/xenos.h>
-@@ -32,11 +35,59 @@
+@@ -32,11 +40,158 @@
  #include <rex/memory.h>
  #include <rex/memory/ring_buffer.h>
  #include <rex/stream.h>
@@ -1225,6 +1230,105 @@ index a744375..f6314ab 100644
 +                    "false: only execute the command stream's register, memory, fence and "
 +                    "interrupt side effects (used when the host renders natively)")
 +    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DEFINE_BOOL(gpu_packet_inventory, false, "GPU",
++                    "Log the executed PM4 packets and their side effects (memory writes, waits, "
++                    "fences, interrupts) every 10 seconds")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++namespace {
++
++// Command processor thread only.
++struct PacketInventory {
++  bool enabled = false;
++  uint32_t packets_since_check = 0;
++  std::chrono::steady_clock::time_point start;
++  uint64_t type_counts[4] = {};
++  uint64_t predicated_skipped = 0;
++  std::array<uint64_t, 128> type3_counts = {};
++  std::map<std::string, uint64_t> details;
++};
++PacketInventory g_inventory;
++
++const char* PacketOpcodeName(uint32_t opcode) {
++  using namespace rex::graphics::xenos;
++  switch (opcode) {
++    case PM4_ME_INIT: return "ME_INIT";
++    case PM4_NOP: return "NOP";
++    case PM4_INTERRUPT: return "INTERRUPT";
++    case PM4_XE_SWAP: return "XE_SWAP";
++    case PM4_INDIRECT_BUFFER: return "INDIRECT_BUFFER";
++    case PM4_INDIRECT_BUFFER_PFD: return "INDIRECT_BUFFER_PFD";
++    case PM4_WAIT_REG_MEM: return "WAIT_REG_MEM";
++    case PM4_REG_RMW: return "REG_RMW";
++    case PM4_REG_TO_MEM: return "REG_TO_MEM";
++    case PM4_MEM_WRITE: return "MEM_WRITE";
++    case PM4_COND_WRITE: return "COND_WRITE";
++    case PM4_EVENT_WRITE: return "EVENT_WRITE";
++    case PM4_EVENT_WRITE_SHD: return "EVENT_WRITE_SHD";
++    case PM4_EVENT_WRITE_EXT: return "EVENT_WRITE_EXT";
++    case PM4_EVENT_WRITE_ZPD: return "EVENT_WRITE_ZPD";
++    case PM4_DRAW_INDX: return "DRAW_INDX";
++    case PM4_DRAW_INDX_2: return "DRAW_INDX_2";
++    case PM4_SET_CONSTANT: return "SET_CONSTANT";
++    case PM4_SET_CONSTANT2: return "SET_CONSTANT2";
++    case PM4_LOAD_ALU_CONSTANT: return "LOAD_ALU_CONSTANT";
++    case PM4_SET_SHADER_CONSTANTS: return "SET_SHADER_CONSTANTS";
++    case PM4_IM_LOAD: return "IM_LOAD";
++    case PM4_IM_LOAD_IMMEDIATE: return "IM_LOAD_IMMEDIATE";
++    case PM4_INVALIDATE_STATE: return "INVALIDATE_STATE";
++    case PM4_VIZ_QUERY: return "VIZ_QUERY";
++    case PM4_SET_BIN_MASK_LO: return "SET_BIN_MASK_LO";
++    case PM4_SET_BIN_MASK_HI: return "SET_BIN_MASK_HI";
++    case PM4_SET_BIN_SELECT_LO: return "SET_BIN_SELECT_LO";
++    case PM4_SET_BIN_SELECT_HI: return "SET_BIN_SELECT_HI";
++    case PM4_SET_BIN_MASK: return "SET_BIN_MASK";
++    case PM4_SET_BIN_SELECT: return "SET_BIN_SELECT";
++    case PM4_CONTEXT_UPDATE: return "CONTEXT_UPDATE";
++    case PM4_WAIT_FOR_IDLE: return "WAIT_FOR_IDLE";
++    default: return "?";
++  }
++}
++
++void InventoryAdd(std::string key) {
++  if (g_inventory.enabled) ++g_inventory.details[std::move(key)];
++}
++
++void InventoryTick() {
++  if (++g_inventory.packets_since_check < 1024) return;
++  g_inventory.packets_since_check = 0;
++  bool enabled = REXCVAR_GET(gpu_packet_inventory);
++  auto now = std::chrono::steady_clock::now();
++  if (enabled && !g_inventory.enabled) {
++    g_inventory = {};
++    g_inventory.start = now;
++  }
++  g_inventory.enabled = enabled;
++  if (!enabled || now - g_inventory.start < std::chrono::seconds(10)) return;
++  double seconds = std::chrono::duration<double>(now - g_inventory.start).count();
++  REXGPU_INFO("PM4-INV {:.1f}s: type0={} type1={} type2={} type3={} predicated_skipped={}",
++              seconds, g_inventory.type_counts[0], g_inventory.type_counts[1],
++              g_inventory.type_counts[2], g_inventory.type_counts[3],
++              g_inventory.predicated_skipped);
++  for (uint32_t op = 0; op < 128; ++op) {
++    if (g_inventory.type3_counts[op]) {
++      REXGPU_INFO("PM4-INV   op {:02X} {}: {}", op, PacketOpcodeName(op),
++                  g_inventory.type3_counts[op]);
++    }
++  }
++  std::vector<std::pair<uint64_t, std::string>> sorted;
++  for (auto& [key, count] : g_inventory.details) sorted.emplace_back(count, key);
++  std::sort(sorted.rbegin(), sorted.rend());
++  for (size_t i = 0; i < sorted.size() && i < 60; ++i) {
++    REXGPU_INFO("PM4-INV   {} x{}", sorted[i].second, sorted[i].first);
++  }
++  if (sorted.size() > 60) REXGPU_INFO("PM4-INV   ... {} more", sorted.size() - 60);
++  g_inventory = {};
++  g_inventory.enabled = true;
++  g_inventory.start = now;
++}
++
++}  // namespace
 +
 +// Diagnostic draw observer registered by the host executable. Called on the
 +// command processor thread after each draw; packet_end (guest physical, just
@@ -1270,7 +1374,56 @@ index a744375..f6314ab 100644
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
                      "Disable for minor CPU overhead reduction, but may break memory coherency.")
-@@ -958,9 +1009,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+@@ -366,6 +521,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+       // Enabled - write to address.
+       uint32_t scratch_addr = regs.values[XE_GPU_REG_SCRATCH_ADDR];
+       uint32_t mem_addr = scratch_addr + (scratch_reg * 4);
++      InventoryAdd(fmt::format("SCRATCH{} -> mem {:08X}", scratch_reg, mem_addr));
+       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(mem_addr), value);
+     }
+   } else {
+@@ -384,6 +540,7 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+       } break;
+ 
+       case XE_GPU_REG_DC_LUT_SEQ_COLOR: {
++        InventoryAdd("gamma ramp write (DC_LUT_SEQ_COLOR)");
+         // Should be in the 256-entry table writing mode.
+         assert_zero(regs[XE_GPU_REG_DC_LUT_RW_MODE] & 0b1);
+         auto gamma_ramp_rw_index = regs.Get<reg::DC_LUT_RW_INDEX>();
+@@ -665,9 +822,11 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
+ bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
+   const uint32_t packet_type = packet >> 30;
++  InventoryTick();
+   if (packet == 0) {
+     return true;
+   }
++  if (g_inventory.enabled) ++g_inventory.type_counts[packet_type];
+ 
+   if (packet == 0xCDCDCDCD) {
+     REXGPU_WARN("GPU packet is CDCDCDCD - probably read uninitialized memory!");
+@@ -747,10 +906,12 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
+   if (packet & 1) {
+     bool any_pass = (bin_select_ & bin_mask_) != 0;
+     if (!any_pass || opcode == PM4_XE_SWAP) {
++      if (g_inventory.enabled) ++g_inventory.predicated_skipped;
+       reader->AdvanceRead(count * sizeof(uint32_t));
+       return true;
+     }
+   }
++  if (g_inventory.enabled) ++g_inventory.type3_counts[opcode];
+ 
+   bool result = false;
+   switch (opcode) {
+@@ -916,6 +1077,7 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
+ 
+   // generate interrupt from the command stream
+   uint32_t cpu_mask = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("INTERRUPT cpu_mask={:02X}", cpu_mask));
+   for (int n = 0; n < 6; n++) {
+     if (cpu_mask & (1 << n)) {
+       if (graphics_system_) {
+@@ -958,9 +1120,28 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
    uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
    reader->AdvanceRead((count - 4) * sizeof(uint32_t));
  
@@ -1299,7 +1452,81 @@ index a744375..f6314ab 100644
    return true;
  }
  
-@@ -1206,7 +1276,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+@@ -988,9 +1169,15 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+   uint32_t wait = reader->ReadAndSwap<uint32_t>();
+ 
+   bool is_memory = (wait_info & 0x10) != 0;
++  if (g_inventory.enabled) {
++    InventoryAdd(fmt::format("WAIT_REG_MEM {} {:08X} func={} ref={:08X} mask={:08X}",
++                             is_memory ? "mem" : "reg", poll_reg_addr, wait_info & 7, ref, mask));
++  }
++  uint32_t wait_iterations = 0;
+ 
+   bool matched = false;
+   do {
++    ++wait_iterations;
+     uint32_t value = 0;
+     if (is_memory) {
+       value =
+@@ -1051,6 +1238,10 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+       }
+     }
+   } while (!matched);
++  if (wait_iterations > 1) {
++    InventoryAdd(fmt::format("WAIT_REG_MEM had to wait: {} {:08X}", is_memory ? "mem" : "reg",
++                             poll_reg_addr));
++  }
+ 
+   return true;
+ }
+@@ -1062,6 +1253,7 @@ bool CommandProcessor::ExecutePacketType3_REG_RMW(memory::RingBuffer* reader, ui
+   uint32_t rmw_info = reader->ReadAndSwap<uint32_t>();
+   uint32_t and_mask = reader->ReadAndSwap<uint32_t>();
+   uint32_t or_mask = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("REG_RMW reg {:04X}", rmw_info & 0x1FFF));
+   uint32_t value = register_file_->values[rmw_info & 0x1FFF];
+   if ((rmw_info >> 31) & 0x1) {
+     // & reg
+@@ -1090,6 +1282,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+   uint32_t mem_addr = reader->ReadAndSwap<uint32_t>();
+ 
+   uint32_t reg_val = ReadRegisterValue(reg_addr);
++  InventoryAdd(fmt::format("REG_TO_MEM reg {:04X} -> mem {:08X}", reg_addr, mem_addr & ~3u));
+ 
+   auto endianness = static_cast<xenos::Endian>(mem_addr & 0x3);
+   mem_addr &= ~0x3;
+@@ -1102,6 +1295,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader, uint32_t packet,
+                                                     uint32_t count) {
+   uint32_t write_addr = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("MEM_WRITE {:08X} dwords={}", write_addr & ~3u, count - 1));
+   for (uint32_t i = 0; i < count - 1; i++) {
+     uint32_t write_data = reader->ReadAndSwap<uint32_t>();
+ 
+@@ -1124,6 +1318,9 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
+   uint32_t mask = reader->ReadAndSwap<uint32_t>();
+   uint32_t write_reg_addr = reader->ReadAndSwap<uint32_t>();
+   uint32_t write_data = reader->ReadAndSwap<uint32_t>();
++  InventoryAdd(fmt::format("COND_WRITE poll {} {:08X} -> {} {:08X}",
++                           (wait_info & 0x10) ? "mem" : "reg", poll_reg_addr,
++                           (wait_info & 0x100) ? "mem" : "reg", write_reg_addr));
+   uint32_t value;
+   if (wait_info & 0x10) {
+     // Memory.
+@@ -1184,6 +1381,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE(memory::RingBuffer* reader
+   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
++  InventoryAdd(fmt::format("EVENT_WRITE event={:02X} count={}", initiator & 0x3F, count));
+   if (count == 1) {
+     // Just an event flag? Where does this write?
+   } else {
+@@ -1203,10 +1401,12 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+ 
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
++  InventoryAdd(fmt::format("EVENT_WRITE_SHD event={:02X} -> mem {:08X}{}", initiator & 0x3F,
++                           address & ~3u, ((initiator >> 31) & 1) ? " (vblank counter)" : ""));
    uint32_t data_value;
    if ((initiator >> 31) & 0x1) {
      // Write counter (GPU vblank counter?).
@@ -1308,7 +1535,24 @@ index a744375..f6314ab 100644
    } else {
      // Write value.
      data_value = value;
-@@ -1282,6 +1352,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+@@ -1228,6 +1428,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT(memory::RingBuffer* re
+   auto endianness = static_cast<xenos::Endian>(address & 0x3);
+   address &= ~0x3;
+ 
++  InventoryAdd(fmt::format("EVENT_WRITE_EXT (screen extents) -> mem {:08X}", address));
+   // Let us hope we can fake this.
+   // This callback tells the driver the xy coordinates affected by a previous
+   // drawcall.
+@@ -1255,6 +1456,8 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+   // Writeback initiator.
+   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
+ 
++  InventoryAdd(fmt::format("EVENT_WRITE_ZPD (occlusion query) -> mem {:08X}",
++                           register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]));
+   // Occlusion queries:
+   // This command is send on query begin and end.
+   // As a workaround report some fixed amount of passed samples.
+@@ -1282,6 +1485,84 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
    return true;
  }
  
@@ -1393,7 +1637,7 @@ index a744375..f6314ab 100644
  bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32_t packet,
                                                const char* opcode_name, uint32_t viz_query_condition,
                                                uint32_t count_remaining) {
-@@ -1368,7 +1516,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1368,7 +1649,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // we don't support yet.
    reader->AdvanceRead(count_remaining * sizeof(uint32_t));
  
@@ -1405,7 +1649,7 @@ index a744375..f6314ab 100644
      auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
      if (!(viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z)) {
        // TODO(Triang3l): Don't drop the draw call completely if the vertex
-@@ -1378,6 +1529,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1378,6 +1662,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
  
        bool major_mode_explicit =
            xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
@@ -1415,7 +1659,7 @@ index a744375..f6314ab 100644
        draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                                   is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
        if (!draw_succeeded) {
-@@ -1400,6 +1554,53 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+@@ -1400,6 +1687,53 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
    // for instance, features not supported by the host), don't terminate command
    // buffer processing as that would leave rendering in a way more inconsistent
    // state than just a single dropped draw command.
@@ -1469,7 +1713,7 @@ index a744375..f6314ab 100644
    return true;
  }
  
-@@ -1611,4 +1812,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
+@@ -1611,4 +1945,60 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(memory::RingBuffer* reader,
    return true;
  }
  
@@ -3529,7 +3773,7 @@ index 91ac08f..79a787f 100644
  }
  
 diff --git a/src/input/mnk/mnk_input_driver.cpp b/src/input/mnk/mnk_input_driver.cpp
-index 3f9422d..f5a2e7d 100644
+index 3f9422d..2c5fcc5 100644
 --- a/src/input/mnk/mnk_input_driver.cpp
 +++ b/src/input/mnk/mnk_input_driver.cpp
 @@ -65,12 +65,9 @@ namespace {
@@ -3572,7 +3816,15 @@ index 3f9422d..f5a2e7d 100644
    uint16_t idx = static_cast<uint16_t>(vk);
    return idx < 256 && key_down[idx];
  }
-@@ -510,6 +514,12 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
+@@ -228,6 +232,7 @@ void MnkInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
+   info.id = kMnkDevice;
+   info.name = "Keyboard and Mouse";
+   info.synthetic = true;
++  info.labels = ButtonLabels::kKeyboard;
+   out.push_back(info);
+ }
+ 
+@@ -510,6 +515,12 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
      case rex::ui::MouseEvent::Button::kMiddle:
        SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
        break;
@@ -3585,7 +3837,7 @@ index 3f9422d..f5a2e7d 100644
      default:
        break;
    }
-@@ -529,6 +539,12 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
+@@ -529,6 +540,12 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
      case rex::ui::MouseEvent::Button::kMiddle:
        SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
        break;
@@ -3787,10 +4039,20 @@ index 3f1a852..a6e6ed7 100644
          io_status_block->status = result;
          io_status_block->information = bytes_read;
 diff --git a/src/kernel/xboxkrnl/xboxkrnl_video.cpp b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
-index 1254710..3308c40 100644
+index 1254710..655213a 100644
 --- a/src/kernel/xboxkrnl/xboxkrnl_video.cpp
 +++ b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
-@@ -481,6 +481,24 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
+@@ -238,7 +238,8 @@ void VdQueryVideoMode(X_VIDEO_MODE* video_mode) {
+   video_mode->display_width = display_width;
+   video_mode->display_height = display_height;
+   video_mode->is_interlaced = 0;
+-  video_mode->is_widescreen = display_width * 3 >= display_height * 4;
++  // Wider than 4:3; 640x480 and 1024x768 are standard (4:3) modes.
++  video_mode->is_widescreen = display_width * 3 > display_height * 4;
+   video_mode->is_hi_def = display_width >= 1280 || display_height >= 720;
+   video_mode->refresh_rate = refresh_rate_hz;
+   video_mode->video_standard = 1;  // NTSC
+@@ -481,6 +482,24 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
  
    auto texture_format = rex::graphics::xenos::TextureFormat(texture_format_ptr.value());
    auto color_space = *color_space_ptr;
@@ -4502,3 +4764,332 @@ index 23645ef..110e310 100644
      // Limiting the frame rate, but lets too long frames cause tearing not to
      // make the latency even worse.
      swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+index 9ce3bb4..f3ede90 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+@@ -974,8 +974,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+       coordinates[coordinate_component_index] = coordinates_operand;
+     }
+     spv::Id texture_resolution_scaled = spv::NoResult;
+-    uint32_t revert_resolution_scale_axes =
+-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
++    uint32_t revert_resolution_scale_axes = uint32_t(DrawResolutionScaleX() != 1.0f) |
++                                            (uint32_t(DrawResolutionScaleY() != 1.0f) << 1);
+     spv::Id const_texture_resolution_scale[] = {spv::NoResult, spv::NoResult};
+     spv::Id const_texture_resolution_scale_reciprocal[] = {spv::NoResult, spv::NoResult};
+     if (revert_resolution_scale_axes) {
+@@ -991,16 +991,14 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+                                 builder_->makeUintConstant(UINT32_C(1) << fetch_constant_index)),
+           const_uint_0_);
+       if (revert_resolution_scale_axes & 0b001) {
+-        const_texture_resolution_scale[0] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_x_));
++        const_texture_resolution_scale[0] = builder_->makeFloatConstant(DrawResolutionScaleX());
+         const_texture_resolution_scale_reciprocal[0] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_));
++            builder_->makeFloatConstant(1.0f / DrawResolutionScaleX());
+       }
+       if (revert_resolution_scale_axes & 0b010) {
+-        const_texture_resolution_scale[1] =
+-            builder_->makeFloatConstant(float(draw_resolution_scale_y_));
++        const_texture_resolution_scale[1] = builder_->makeFloatConstant(DrawResolutionScaleY());
+         const_texture_resolution_scale_reciprocal[1] =
+-            builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_));
++            builder_->makeFloatConstant(1.0f / DrawResolutionScaleY());
+       }
+     }
+ 
+@@ -2029,11 +2027,57 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           }
+         }
+ 
++        // Round unsigned normalized fixed-point results to 16 fractional bits
++        // like the guest's filtering.
++        {
++          id_vector_temp_.clear();
++          id_vector_temp_.push_back(
++              builder_->makeIntConstant(kSystemConstantTexturesRoundNormalized));
++          spv::Id round_normalized = builder_->createBinOp(
++              spv::OpINotEqual, type_bool_,
++              builder_->createBinOp(
++                  spv::OpBitwiseAnd, type_uint_,
++                  builder_->createLoad(builder_->createAccessChain(spv::StorageClassUniform,
++                                                                   uniform_system_constants_,
++                                                                   id_vector_temp_),
++                                       spv::NoPrecision),
++                  builder_->makeUintConstant(UINT32_C(1) << fetch_constant_index)),
++              const_uint_0_);
++          spv::Id const_float_65536 = builder_->makeFloatConstant(65536.0f);
++          spv::Id const_float_1_65536 = builder_->makeFloatConstant(1.0f / 65536.0f);
++          uint32_t result_remaining_components = used_result_nonzero_components;
++          uint32_t result_component_index;
++          while (rex::bit_scan_forward(result_remaining_components, &result_component_index)) {
++            result_remaining_components &= ~(UINT32_C(1) << result_component_index);
++            spv::Id rounded = builder_->createNoContractionBinOp(
++                spv::OpFMul, type_float_, result[result_component_index], const_float_65536);
++            rounded = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
++                                                       GLSLstd450RoundEven, rounded);
++            rounded = builder_->createNoContractionBinOp(spv::OpFMul, type_float_, rounded,
++                                                         const_float_1_65536);
++            result[result_component_index] =
++                builder_->createTriOp(spv::OpSelect, type_float_, round_normalized, rounded,
++                                      result[result_component_index]);
++          }
++        }
++
+         // Apply the exponent bias from the bits 13:18 of the fetch constant
+-        // word 4.
++        // word 3.
++        id_vector_temp_.clear();
++        id_vector_temp_.push_back(const_int_0_);
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) >> 2)));
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) & 3)));
++        spv::Id fetch_constant_word_3_signed = builder_->createUnaryOp(
++            spv::OpBitcast, type_int_,
++            builder_->createLoad(builder_->createAccessChain(spv::StorageClassUniform,
++                                                             uniform_fetch_constants_,
++                                                             id_vector_temp_),
++                                 spv::NoPrecision));
+         spv::Id result_exponent_bias = builder_->createBinBuiltinCall(
+             type_float_, ext_inst_glsl_std_450_, GLSLstd450Ldexp, const_float_1_,
+-            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_4_signed,
++            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_3_signed,
+                                   builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
+         {
+           uint32_t result_remaining_components = used_result_nonzero_components;
+diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
+index dce3dbf..fc18299 100644
+--- a/include/rex/graphics/pipeline/shader/spirv_translator.h
++++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
+@@ -307,6 +307,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     uint32_t vertex_index_max;
+     float tessellation_factor_range_min;
+     float tessellation_factor_range_max;
++
++    // One bit per texture fetch constant: an unsigned normalized fetch from a
++    // fixed-point format. The guest filters these to 16 fractional bits, and
++    // some shaders compare the result against exact values, so it's rounded.
++    uint32_t textures_round_normalized;
+   };
+ 
+   enum ConstantBuffer : uint32_t {
+@@ -411,6 +416,16 @@ class SpirvShaderTranslator : public ShaderTranslator {
+         draw_resolution_scale_x_(draw_resolution_scale_x ? draw_resolution_scale_x : 1),
+         draw_resolution_scale_y_(draw_resolution_scale_y ? draw_resolution_scale_y : 1) {}
+ 
++  // Host render targets that are a non-integer multiple of the guest size
++  // (no EDRAM emulation): pixel positions and resolution-scaled texture fetches
++  // use these factors. Paths that need whole host pixels per guest pixel
++  // (memexport once per guest pixel, fragment shader interlock) keep the
++  // integer scale.
++  void SetFractionalDrawResolutionScale(float x, float y) {
++    draw_resolution_scale_x_fractional_ = x;
++    draw_resolution_scale_y_fractional_ = y;
++  }
++
+   uint64_t GetDefaultVertexShaderModification(
+       uint32_t dynamic_addressable_register_count,
+       Shader::HostVertexShaderType host_vertex_shader_type =
+@@ -758,6 +773,19 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   bool edram_fragment_shader_interlock_;
+   uint32_t draw_resolution_scale_x_;
+   uint32_t draw_resolution_scale_y_;
++  // Non-integer override (0 = use the integer scale), see
++  // SetFractionalDrawResolutionScale.
++  float draw_resolution_scale_x_fractional_ = 0.0f;
++  float draw_resolution_scale_y_fractional_ = 0.0f;
++
++  float DrawResolutionScaleX() const {
++    return draw_resolution_scale_x_fractional_ > 0.0f ? draw_resolution_scale_x_fractional_
++                                                      : float(draw_resolution_scale_x_);
++  }
++  float DrawResolutionScaleY() const {
++    return draw_resolution_scale_y_fractional_ > 0.0f ? draw_resolution_scale_y_fractional_
++                                                      : float(draw_resolution_scale_y_);
++  }
+ 
+   // Is currently writing the empty depth-only pixel shader, such as for depth
+   // and stencil testing with fragment shader interlock.
+@@ -879,6 +907,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     kSystemConstantEdramRTKeepMask,
+     kSystemConstantEdramRTClamp,
+     kSystemConstantEdramBlendConstant,
++    kSystemConstantTexturesRoundNormalized,
+   };
+   spv::Id uniform_system_constants_;
+   spv::Id uniform_float_constants_;
+diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
+index 1774f97..a3817a5 100644
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -309,6 +309,8 @@ void SpirvShaderTranslator::StartTranslation() {
+       {"edram_rt_keep_mask", offsetof(SystemConstants, edram_rt_keep_mask), type_uint4_array_2},
+       {"edram_rt_clamp", offsetof(SystemConstants, edram_rt_clamp), type_float4_array_4},
+       {"edram_blend_constant", offsetof(SystemConstants, edram_blend_constant), type_float4_},
++      {"textures_round_normalized", offsetof(SystemConstants, textures_round_normalized),
++       type_uint_},
+   };
+   id_vector_temp_.clear();
+   id_vector_temp_.reserve(rex::countof(system_constants));
+@@ -3210,10 +3212,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    if (draw_resolution_scale_x_ > 1) {
++    if (DrawResolutionScaleX() != 1.0f) {
+       param_gen_x = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_x,
+-          builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_)));
++          builder_->makeFloatConstant(1.0f / DrawResolutionScaleX()));
+     }
+     param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_x);
+@@ -3246,10 +3248,10 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
+             builder_->createAccessChain(spv::StorageClassInput, input_fragment_coordinates_,
+                                         id_vector_temp_),
+             spv::NoPrecision));
+-    if (draw_resolution_scale_y_ > 1) {
++    if (DrawResolutionScaleY() != 1.0f) {
+       param_gen_y = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_y,
+-          builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_)));
++          builder_->makeFloatConstant(1.0f / DrawResolutionScaleY()));
+     }
+     param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_y);
+diff --git a/include/rex/input/device.h b/include/rex/input/device.h
+index 7b67ceb..4438ba2 100644
+--- a/include/rex/input/device.h
++++ b/include/rex/input/device.h
+@@ -22,12 +22,16 @@ constexpr uint32_t kMaxGuestUsers = 4;
+ /// device took the freed slot.
+ enum class DeviceId : uint64_t { kInvalid = 0 };
+ 
++/// The button labels printed on a device, for matching in-game button prompts.
++enum class ButtonLabels : uint8_t { kXbox, kPlayStation4, kPlayStation5, kKeyboard };
++
+ struct DeviceInfo {
+   DeviceId id = DeviceId::kInvalid;
+   uint32_t ordinal = 0;  // connection order, assigned by InputSystem
+   std::string name;
+   std::string guid;
+   bool synthetic = false;  // keyboard/mouse emulation or the NOP stand-in
++  ButtonLabels labels = ButtonLabels::kXbox;
+ };
+ 
+ }  // namespace rex::input
+diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
+index 1cb3faa..9e84f4d 100644
+--- a/include/rex/input/input_system.h
++++ b/include/rex/input/input_system.h
+@@ -10,6 +10,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <array>
++#include <atomic>
+ #include <memory>
+ #include <vector>
+ 
+@@ -47,6 +49,10 @@ class InputSystem : public system::IInputSystem {
+   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
+   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
++  /// Button labels of the device the user most recently used (kXbox before
++  /// any input). Safe from any thread.
++  ButtonLabels ActiveButtonLabels(uint32_t user_index) const;
++
+  private:
+   /// Re-enumerates every driver and notifies the assignment when the set
+   /// changed.
+@@ -60,6 +66,7 @@ class InputSystem : public system::IInputSystem {
+ 
+   std::unique_ptr<DeviceAssignment> assignment_;
+   ActiveDeviceTracker active_devices_;
++  std::array<std::atomic<ButtonLabels>, kMaxGuestUsers> active_labels_ = {};
+ 
+   // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
+   // does not renumber pad two.
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index 813bb1c..6b78b86 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -242,6 +242,12 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     }
+   }
+ 
++  if (user_index < kMaxGuestUsers) {
++    if (const DeviceInfo* info = DeviceInfoFor(active_devices_.Active(user_index))) {
++      active_labels_[user_index].store(info->labels, std::memory_order_relaxed);
++    }
++  }
++
+   if (!any) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
+@@ -251,6 +257,13 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   return X_ERROR_SUCCESS;
+ }
+ 
++ButtonLabels InputSystem::ActiveButtonLabels(uint32_t user_index) const {
++  if (user_index >= kMaxGuestUsers) {
++    return ButtonLabels::kXbox;
++  }
++  return active_labels_[user_index].load(std::memory_order_relaxed);
++}
++
+ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
+   SCOPE_profile_cpu_f("hid");
+   if (!assignment_) {
+diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
+index c7c440d..b06d057 100644
+--- a/src/input/sdl/sdl_input_driver.cpp
++++ b/src/input/sdl/sdl_input_driver.cpp
+@@ -162,6 +162,18 @@ void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
+                      static_cast<int>(sizeof(guid_text)));
+     info.guid = guid_text;
+     info.synthetic = false;
++    switch (SDL_GetGamepadType(controller.sdl)) {
++      case SDL_GAMEPAD_TYPE_PS3:
++      case SDL_GAMEPAD_TYPE_PS4:
++        info.labels = ButtonLabels::kPlayStation4;
++        break;
++      case SDL_GAMEPAD_TYPE_PS5:
++        info.labels = ButtonLabels::kPlayStation5;
++        break;
++      default:
++        info.labels = ButtonLabels::kXbox;
++        break;
++    }
+     out.push_back(info);
+   }
+ }
+diff --git a/src/audio/xma_context.cpp b/src/audio/xma_context.cpp
+index 11b83be..4ee14f9 100644
+--- a/src/audio/xma_context.cpp
++++ b/src/audio/xma_context.cpp
+@@ -98,6 +98,11 @@ bool XmaContext::Work() {
+   }
+ 
+   std::lock_guard<std::mutex> lock(lock_);
++  // A sweep can wait on lock_ across a guest XMADisableContext; decoding then
++  // would overwrite the guest's context update.
++  if (!is_allocated() || !is_enabled()) {
++    return false;
++  }
+   set_is_enabled(false);
+ 
+   auto context_ptr = memory()->TranslateVirtual(guest_ptr());
+@@ -417,7 +422,8 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
+   fresh.input_buffer_read_offset = data.input_buffer_read_offset;
+   fresh.error_status = data.error_status;
+   fresh.current_buffer = data.current_buffer;
+-  fresh.output_buffer_read_offset = data.output_buffer_read_offset;
++  // output_buffer_read_offset is guest-owned; storing the snapshot would undo
++  // XMASetOutputBufferReadOffset and replay consumed output.
+ 
+   fresh.Store(context_ptr);
+ }

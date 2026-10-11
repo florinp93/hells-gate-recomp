@@ -1,10 +1,18 @@
 #pragma once
 
+// Code called from the generated recompiled functions.
+//
+// Saving and loading go through a guest setjmp / longjmp pair. The longjmp
+// has to unwind the host C++ stack of the recompiled calls as well, so
+// patches/generated/apply_generated_patches.py routes both through a host
+// setjmp / longjmp here.
+
+#include <rex/logging/macros.h>
 #include <rex/ppc.h>
 #include <rex/runtime.h>
-#include <rex/logging/macros.h>
-#include <cstdint>
+
 #include <csetjmp>
+#include <cstdint>
 
 inline thread_local jmp_buf g_fiber_jmp_buf;
 inline thread_local uint32_t g_setjmp_ctx_addr = 0;
@@ -25,6 +33,8 @@ inline void FiberLongjmp(uint32_t return_value) {
   longjmp(g_fiber_jmp_buf, 1);
 }
 
+// After a longjmp: the guest registers the guest setjmp saved in its buffer
+// (f14-f31, r1, r13-r31, CR, LR, v64-v127), and the longjmp's return value.
 inline void FiberRestoreContext(PPCContext& ctx, uint8_t* base) {
   if (g_setjmp_ctx_addr == 0) return;
   uint32_t addr = g_setjmp_ctx_addr;
@@ -56,8 +66,8 @@ inline void FiberRestoreContext(PPCContext& ctx, uint8_t* base) {
     }
   }
   ctx.r3.u32 = g_longjmp_return_value;
-  REXLOG_INFO("FIBER: restored ctx from jmp_buf @{:08X} r1=0x{:08X} r3={}",
-              addr, ctx.r1.u32, ctx.r3.s32);
+  REXLOG_INFO("FIBER: restored ctx from jmp_buf @{:08X} r1=0x{:08X} r3={}", addr, ctx.r1.u32,
+              ctx.r3.s32);
 }
 
 inline float g_ultrawide_target_aspect = 0.0f;
@@ -67,8 +77,8 @@ inline float g_ultrawide_target_aspect = 0.0f;
 // (projection, FOV, UI layout) use the configured target aspect.
 inline void UltrawideAspectHook(rex::ppc::Register& f0) {
   if (g_ultrawide_target_aspect > 0.0f) {
-    REXLOG_INFO("ULTRAWIDE: aspect store override {:.4f} -> {:.4f}",
-                f0.f64, g_ultrawide_target_aspect);
+    REXLOG_INFO("ULTRAWIDE: aspect store override {:.4f} -> {:.4f}", f0.f64,
+                g_ultrawide_target_aspect);
     f0.f64 = g_ultrawide_target_aspect;
   }
 }

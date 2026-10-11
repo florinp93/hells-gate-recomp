@@ -1,12 +1,10 @@
-; Dante's Inferno - Inno Setup installer script
-; Produces a standard Windows installer that is less likely to be flagged
-; by SmartScreen/Windows Defender than the custom WPF payload installer.
+; Dante's Inferno installer (Inno Setup 6). Built by package-release.ps1.
 
 #define MyAppName "Dante's Inferno"
 #define MyAppPublisher "florinp93"
 #define MyAppURL "https://github.com/florinp93/hells-gate-recomp"
 #define MyAppExeName "DantesInfernoLauncher.exe"
-#define MyAppVersion "0.7.2-beta-hotfix"
+#define MyAppVersion "0.8.2-beta"
 
 [Setup]
 AppId={{DANTES-INFERNO-PC-PORT}}
@@ -27,6 +25,8 @@ WizardStyle=modern
 PrivilegesRequired=admin
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
+; Updates (launcher "Download & Install") reuse the installed folder.
+DisableDirPage=auto
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 SetupIconFile=icon.ico
@@ -46,7 +46,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Port binaries (from the C++ build)
 Source: "..\out\build\win-amd64-release\dantes_inferno.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\out\build\win-amd64-release\dantes_inferno_native.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\rexruntime.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\rexgpu-xenos.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\out\build\win-amd64-release\amd_fidelityfx_dx12.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -64,19 +63,11 @@ Source: "DantesInfernoLauncher\bin\Release\version.txt"; DestDir: "{app}"; Flags
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "banner.jpg"; DestDir: "{app}"; Flags: ignoreversion
 
-; ISO extraction tool (bundled, used post-install)
+; Extracts the user's ISO into game\ after install; no game data is shipped.
 Source: "..\tools\extract-xiso\extract-xiso.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
-; Pre-generated shader caches — seeded into the user shader storage on first
-; launch so the startup preload runs instead of mid-game shader compilation.
-Source: "..\packaging\shader_cache\*"; DestDir: "{app}\shader_cache"; Flags: ignoreversion
-
-; NOTE: Game data (game/) is NOT included — the user provides their own ISO
-; and the post-install step extracts it.
-
-; Title Update 2 (TU2) patch — enables playable DLC like Trials of Saint Lucia.
-; The runtime automatically applies this patch when default.xexp is present
-; alongside default.xex in the game folder.
+; Title Update 2, needed for playable DLC such as Trials of Saint Lucia; the
+; game applies default.xexp found next to default.xex.
 #define TuPath SourcePath + "\..\out\build\win-amd64-release\default.xexp"
 #if FileExists(TuPath)
 Source: "{#TuPath}"; DestDir: "{app}\game"; Flags: ignoreversion
@@ -88,11 +79,15 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
-; Extract game data from ISO during install (visible console so user sees progress)
 Filename: "{tmp}\extract-xiso.exe"; Parameters: "-x -d ""{app}\game"" -s ""{code:GetIsoPath}"""; WorkingDir: "{app}"; StatusMsg: "Extracting game data from ISO (this may take a few minutes)..."; Flags: hidewizard; Check: NeedsExtraction
 
-; Launch the launcher after install
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Dante's Inferno Launcher"; Flags: postinstall nowait skipifsilent
+
+[InstallDelete]
+; Left by earlier versions: the SDK Vulkan build and the D3D12 renderer's
+; shader caches, unused by the native renderer.
+Type: files; Name: "{app}\dantes_inferno_native.exe"
+Type: filesandordirs; Name: "{app}\shader_cache"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\game"
@@ -105,7 +100,7 @@ var
   IsoPage: TInputFileWizardPage;
   IsoSizeMB: Int64;
 
-{ Windows API to get file size (supports >4GB files) }
+{ File sizes above 4 GB (ISOs) }
 function GetFileSizeEx(hFile: THandle; var lpFileSize: Int64): Boolean;
   external 'GetFileSizeEx@kernel32.dll stdcall';
 function CreateFileW(lpFileName: WideString; dwDesiredAccess: Cardinal; dwShareMode: Cardinal; lpSecurityAttributes: Cardinal; dwCreationDisposition: Cardinal; dwFlagsAndAttributes: Cardinal; hTemplateFile: Cardinal): THandle;
@@ -160,6 +155,17 @@ begin
   Result := IsoPage.Values[0];
 end;
 
+function GameDataPresent: Boolean;
+begin
+  Result := FileExists(AddBackslash(WizardDirValue) + 'game\default.xex');
+end;
+
+{ Updates and reinstalls keep the extracted game: no ISO needed. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = IsoPage.ID) and GameDataPresent;
+end;
+
 function NeedsExtraction: Boolean;
 begin
   Result := (IsoPage.Values[0] <> '');
@@ -194,15 +200,13 @@ var
   BaseMB: Int64;
   TotalMB: Int64;
 begin
-  { When arriving at the "Ready to Install" page, update the disk space label }
   if CurPageID = wpReady then
   begin
-    { Base install size from [Files] (approx 55 MB for port binaries + launcher) }
+    { Port binaries and launcher }
     BaseMB := 55;
     if IsoSizeMB > 0 then
     begin
-      { ISO extraction roughly doubles the ISO size on disk (game data is
-        uncompressed from the ISO container). Use 1.5x as a conservative estimate. }
+      { Extracted game data plus headroom }
       TotalMB := BaseMB + Round(IsoSizeMB * 1.5);
       WizardForm.DiskSpaceLabel.Caption :=
         'Required space (port + game data from ISO): ' + FormatMB(TotalMB) +
@@ -239,26 +243,20 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    { Write dantes_inferno.toml with sensible defaults }
+    { First install: default settings }
     ConfigPath := ExpandConstant('{app}\dantes_inferno.toml');
     if not FileExists(ConfigPath) then
     begin
       SaveStringToFile(ConfigPath,
         'game_data_root = "' + ExpandConstant('{app}\game') + '"' + #13#10 +
-        'render_target_path_d3d12 = "rov"' + #13#10 +
-        'renderer = "native"' + #13#10 +
-        'log_level = "off"' + #13#10 +
-        'resolution_scale = 1' + #13#10 +
-        'swap_post_effect = "none"' + #13#10 +
         'anisotropic_override = -1' + #13#10 +
-        'vsync = true' + #13#10 +
         'fullscreen = true' + #13#10 +
         'input_backend = "sdl"' + #13#10 +
         'dlc_source_path = "' + ExpandConstant('{app}\dlc') + '"' + #13#10,
         False);
     end;
 
-    { Always write version.txt so updates reflect the new version }
+    { The launcher's update check reads version.txt }
     VersionFile := ExpandConstant('{app}\version.txt');
     SaveStringToFile(VersionFile, '{#MyAppVersion}' + #13#10, False);
   end;

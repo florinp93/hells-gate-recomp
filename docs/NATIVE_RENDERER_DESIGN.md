@@ -1,6 +1,7 @@
 # Native Renderer Design: D3D-Layer Replacement
 
-**Status:** M0-M2 complete, M3 designed (2026-10-07). Supersedes the scene-data approach in
+**Status:** M0-M4 done; M5 parity in progress, M5b parked; M6 resolution,
+aspect ratio and frame rate done (2026-10-11). Supersedes the scene-data approach in
 `tools/research/dante_re/TRANSITION/NATIVE_RENDERER_PLAN.md` (RE-030 judged it
 impractical) and the "replace Xenos piece by piece" plan in
 `docs/HYBRID_RENDERER_PLAN.md`.
@@ -27,13 +28,29 @@ reaches parity.
 
 Map of the D3D layer: `docs/NATIVE_D3D_MAP.md`.
 
+## Source files (`src/renderer/`)
+
+| File | Role |
+|------|------|
+| `d3d_hooks.cpp` | `REX_HOOK_RAW` overrides of the D3D functions; F8 trace |
+| `renderer.{h,cpp}` | `renderer=dante`: render targets, clears, resolves, draws, Swap |
+| `guest_gpu_state.{h,cpp}` | GPU state at a draw, rebuilt from the D3D device |
+| `state_verifier.{h,cpp}` | F9: compares that state with the command processor's |
+| `shader_cache.{h,cpp}` | Xenos ucode -> SPIR-V (SDK translator) -> Diligent shaders |
+| `texture_cache.{h,cpp}` | Fetch constants -> native textures and samplers |
+| `draw_renderer.{h,cpp}` | Pipelines, shared memory, constants; issues the draws |
+| `vulkan_device.{h,cpp}` | DiligentCore Vulkan device and swap chain on the game window |
+| `smaa_pass.{h,cpp}` | SMAA on the presented frame |
+| `button_glyphs.{h,cpp}` | PlayStation / keyboard button prompts |
+| `renderer_config.{h,cpp}` | `renderer` cvar; GPU plugin settings for `renderer=dante` |
+
 ## Architecture
 
 ```
 recompiled game (unchanged)
    │  calls D3DDevice_* (sub_827Cxxxx … sub_8291Dxxx)
    ▼
-REX_HOOK_RAW overrides  (src/native_renderer/d3d_trace.cpp)
+REX_HOOK_RAW overrides  (src/renderer/d3d_hooks.cpp)
    │  renderer != dante → __imp__sub_XXXX (original, Xenos path)
    │  renderer == dante ↓
    ▼
@@ -71,7 +88,7 @@ Each milestone ends with a build the user runs; the Xenos path stays default.
 ### M0: Map the D3D layer (DONE, 2026-10-07)
 - Function override mechanism confirmed (weak aliases, `REX_HOOK_RAW`).
 - D3D layer located and mapped; device register-shadow layout derived.
-- Diagnostic hooks added: `src/native_renderer/d3d_trace.cpp`
+- Diagnostic hooks added: `src/renderer/d3d_hooks.cpp`
   (`--d3d_trace_frames=N` or **F8** in game).
 - GPU pass tracer saved into the SDK patch.
 
@@ -91,7 +108,7 @@ Each milestone ends with a build the user runs; the Xenos path stays default.
 - **Done 2026-10-07** (log 323): menu, gameplay and pause frames, all draws
   match the Xenos register file on every shader-read register. Rules in
   `docs/NATIVE_D3D_MAP.md`, "Effective GPU state at a draw". F9 /
-  `--native_observe_frames=N`.
+  `--verify_gpu_state_frames=N`.
 
 ### M3: Native frame skeleton (DONE except optional M3.5, 2026-10-07)
 
@@ -131,7 +148,7 @@ prerequisite.
 #### Components
 
 ```
-d3d hooks (d3d_trace.cpp)  --after original-->  DanteDevice (new, render thread)
+d3d hooks (d3d_hooks.cpp)  --after original-->  DanteDevice (new, render thread)
                                                    |-- GpuState     M2 state builder, shared with the observer
                                                    |-- EdramModel   host RTs keyed by EDRAM base/pitch/format/MSAA
                                                    |-- Resolver     RB_COPY_* -> SDK draw_util::GetResolveInfo -> copy
@@ -164,8 +181,8 @@ d3d hooks (d3d_trace.cpp)  --after original-->  DanteDevice (new, render thread)
   `0xAA001000`/`0xAA39A000`) is looked up in the TextureRegistry and
   presented. Presentation must not block the render thread; the game's own
   vblank pacing stays in charge.
-- **Presenter**: reuse `native_presenter.cpp` (DiligentCore swapchain that
-  detaches the SDK presenter from the window). ImGui overlays (FPS, settings,
+- **Presenter**: a DiligentCore swapchain that detaches the SDK presenter
+  from the window (`vulkan_device.cpp`). ImGui overlays (FPS, settings,
   achievements) are not shown on this path until M6.
 - **Draws**: counted per frame and logged with the pass (RT key), not issued.
 
@@ -180,7 +197,7 @@ d3d hooks (d3d_trace.cpp)  --after original-->  DanteDevice (new, render thread)
    memexporting shader (memexport draws would lose their output when
    skipped).
 2. **M3.2 GpuState refactor.** Move the M2 state builder into
-   `gpu_state.{h,cpp}`; the observer uses it unchanged (F9 must stay clean).
+   `guest_gpu_state.{h,cpp}`; the observer uses it unchanged (F9 must stay clean).
 3. **M3.3 Native presenter + Swap.** DiligentCore swapchain on the game
    window; Swap presents a debug pattern plus the frame counter. Check:
    window, resize, fullscreen, alt-tab, no pacing change.
@@ -203,9 +220,9 @@ the right native textures (verified by the `NATIVE-RT` pass log).
   `occlusion_query_enable=false` under `--renderer=dante`; F10 toggles host
   rendering at runtime. Steady 60 fps black, saves work, 15 on/off toggles
   without issue. memexport: 0 draws (log 326).
-- **M3.2 done** (log 326): `src/native_renderer/gpu_state.{h,cpp}`; F9 still
+- **M3.2 done** (log 326): `src/renderer/guest_gpu_state.{h,cpp}`; F9 still
   975/975 clean.
-- **M3.3 done** (log 326): `src/native_renderer/dante_device.{h,cpp}` owns a
+- **M3.3 done** (log 326): `src/renderer/renderer.{h,cpp}` owns a
   DiligentCore swapchain on the game window; window handling verified.
 - **M3.4 done** (log 328): host RTs per (EDRAM base, pitch, format, depth),
   `Clear`, `Resolve` (from the call's own arguments; flags `&7` source,
@@ -249,7 +266,7 @@ them by name):
 | Set | Contents (translator names) | Native source |
 |---|---|---|
 | 0 | `xe_shared_memory`: 512 MB SSBO = guest physical memory | Native buffer; vertex/index ranges uploaded raw (big-endian; the shader swaps) |
-| 1 | `xe_uniform_system_constants`, float VS/PS, bool/loop, fetch constants | `gpu::State` (M2-exact) + system constants computed per draw |
+| 1 | `xe_uniform_system_constants`, float VS/PS, bool/loop, fetch constants | `GuestRegisters` (M2-exact) + system constants computed per draw |
 | 2/3 | `xe_texture{N}_{dim}_{s/u}` + samplers (VS/PS) | Native textures: untiled guest textures or M3 resolve targets |
 
 Host render targets are used (no FSI/EDRAM-in-shader), so the `edram_*`
@@ -296,7 +313,7 @@ registers, VS/PS ucode hash and index buffer.
 What it took beyond the plan above:
 - VS microcode from the program flush's `IM_LOAD` / `IM_LOAD_IMMEDIATE`
   (D3D patches fetches per declaration and copies busy variants to the ring).
-- Stale literal constants persist across draws (`gpu_state`).
+- Stale literal constants persist across draws (`guest_gpu_state.cpp`).
 - Resolve `copy_dest_swap` tracked per resolve target and folded into view
   swizzles; the front buffer is presented with its own fetch swizzle.
 - Shared-memory uploads: overlapping ranges invalidate each other; static
@@ -333,6 +350,9 @@ in RenderDoc captures of renderer=xenos (D3D12) and renderer=dante.
   complete against the native GPU timeline by writing `*[dev+10896]`;
   occlusion queries answered natively; `VdSwap` handled without PM4.
 - Exit: no PM4 parsing at all, same behaviour as M5.
+- Status (2026-10-09): parked. The CP protocol is mapped (docs/NATIVE_D3D_MAP.md,
+  "Command processor protocol"); it is needed for frame pacing above 60 fps,
+  not for parity or performance at 60.
 
 ### M6: Native-only features
 - True internal resolution (RTs we own), ultrawide without letterboxing,

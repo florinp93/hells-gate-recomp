@@ -1,3 +1,5 @@
+# Clones the ReXGlue SDK into thirdparty\rexglue-sdk, applies the local SDK
+# and DiligentCore patches, and prints the remaining build steps.
 
 $ErrorActionPreference = "Stop"
 

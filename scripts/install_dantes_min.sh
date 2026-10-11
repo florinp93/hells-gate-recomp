@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dependencias mínimas/útiles para hells-gate-recomp + ReXGlue en Ubuntu.
-# Mantiene las librerías de desarrollo para evitar faltantes al compilar.
-# Clang usado por el proyecto: 22.
+# Build dependencies for the Linux port on Ubuntu: Clang 22, CMake 3.25+,
+# Ninja, PowerShell 7 (SDK patch scripts) and the X11 / Wayland / audio /
+# Vulkan / GTK development libraries.
 
 if [[ ! -r /etc/os-release ]]; then
-  echo "ERROR: No se pudo detectar la distribución."
+  echo "ERROR: cannot detect the distribution."
   exit 1
 fi
 
@@ -14,16 +14,13 @@ fi
 
 CODENAME="${VERSION_CODENAME:-}"
 if [[ -z "$CODENAME" ]]; then
-  echo "ERROR: No se pudo detectar VERSION_CODENAME."
+  echo "ERROR: cannot detect VERSION_CODENAME."
   exit 1
 fi
 
-echo "==> Ubuntu: ${PRETTY_NAME:-desconocido} (${CODENAME})"
+echo "==> Ubuntu: ${PRETTY_NAME:-unknown} (${CODENAME})"
 
 sudo apt update
-
-
-# Herramientas realmente usadas por el flujo.
 sudo apt install -y \
   build-essential \
   cmake \
@@ -33,9 +30,10 @@ sudo apt install -y \
   python3 \
   wget \
   gnupg \
-  ca-certificates
+  ca-certificates \
+  apt-transport-https \
+  software-properties-common
 
-# Librerías de desarrollo: X11/Wayland, audio, Vulkan y GTK.
 sudo apt install -y \
   libgtk-3-dev \
   libxss-dev \
@@ -55,47 +53,33 @@ sudo apt install -y \
   libpulse-dev \
   libvulkan-dev
 
-# ============================
-# Instalar PowerShell 7
-# ============================
+# PowerShell 7 from Microsoft's package repository.
+if ! command -v pwsh >/dev/null 2>&1; then
+  echo "==> Installing PowerShell 7..."
+  wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb" \
+    -O packages-microsoft-prod.deb
+  sudo dpkg -i packages-microsoft-prod.deb
+  rm -f packages-microsoft-prod.deb
+  sudo apt update
+  sudo apt install -y powershell
+fi
 
-sudo apt update
-sudo apt install -y wget apt-transport-https software-properties-common
-
-source /etc/os-release
-
-wget -q \
-  "https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb" \
-  -O packages-microsoft-prod.deb
-
-sudo dpkg -i packages-microsoft-prod.deb
-rm -f packages-microsoft-prod.deb
-
-
-
-
-sudo apt update
-sudo snap install powershell --classic
-
-# ReXGlue requiere CMake >= 3.25. En Ubuntu 22.04 el de Ubuntu es demasiado viejo.
+# ReXGlue needs CMake 3.25+; Ubuntu 22.04 ships an older one.
 CMAKE_VERSION="$(cmake --version | awk 'NR==1 {print $3}')"
 if dpkg --compare-versions "$CMAKE_VERSION" lt "3.25"; then
-  echo "==> CMake ${CMAKE_VERSION} es menor que 3.25; instalando CMake de Kitware..."
-
+  echo "==> CMake ${CMAKE_VERSION} is older than 3.25; installing Kitware's CMake..."
   wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc \
     | gpg --dearmor \
     | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-
   echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ ${CODENAME} main" \
     | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-
   sudo apt update
   sudo apt install -y cmake
 fi
 
-# Clang 22 desde apt.llvm.org. llvm.sh detecta el codename de Ubuntu.
+# Clang 22 from apt.llvm.org.
 if ! command -v clang-22 >/dev/null 2>&1; then
-  echo "==> Instalando Clang 22 desde apt.llvm.org..."
+  echo "==> Installing Clang 22 from apt.llvm.org..."
   TMP_LLVM="$(mktemp)"
   wget -q https://apt.llvm.org/llvm.sh -O "$TMP_LLVM"
   chmod +x "$TMP_LLVM"
@@ -103,29 +87,17 @@ if ! command -v clang-22 >/dev/null 2>&1; then
   rm -f "$TMP_LLVM"
 fi
 
-
-
-# Conservamos lld y libc++/libc++abi, aunque nuestro build actual usa libstdc++.
-sudo apt update
-sudo apt install -y \
-  clang-22 \
-  lld-22 \
-  libc++-22-dev \
-  libc++abi-22-dev
-
+sudo apt install -y clang-22 lld-22 libc++-22-dev libc++abi-22-dev
 
 sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-22 220
 sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-22 220
-
 if [ -f /usr/bin/ld.lld-22 ]; then
   sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-22 220
 fi
 
-# En Ubuntu 22.04, usar libstdc++ 13 para las partes C++23 de ReXGlue.
-# Clang 22 sigue siendo el compilador.
+# Ubuntu 22.04: libstdc++ 13 for ReXGlue's C++23 code (Clang 22 still compiles).
 if [[ "$CODENAME" == "jammy" ]]; then
-  echo "==> Jammy detectado: instalando libstdc++ 13 para C++23..."
-  sudo apt install -y software-properties-common
+  echo "==> Jammy: installing libstdc++ 13..."
   sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
   sudo apt update
   sudo apt install -y g++-13 libstdc++-13-dev
@@ -139,5 +111,4 @@ cmake --version | head -n 1
 ninja --version
 pwsh --version
 echo
-echo "Dependencias listas."
-echo "Usa /usr/bin/clang-22 y /usr/bin/clang++-22 al configurar CMake."
+echo "Dependencies installed. Configure CMake with /usr/bin/clang-22 and /usr/bin/clang++-22."

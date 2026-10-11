@@ -7,12 +7,9 @@ using System.Text.RegularExpressions;
 namespace DantesInferno
 {
     /// <summary>
-    /// Reads the game's language manifest from the BIG archives.
-    /// The manifest is a small text file inside bigfile*.viv that lists the
-    /// text/audio languages actually shipped on the disc (e.g. the "pal_it"
-    /// SKU only carries English, German and Italian). The XEX region flags
-    /// alone over-report supported languages, so the manifest is the
-    /// authoritative source for the language dropdown.
+    /// The language manifest in bigfile*.viv: the text and audio languages on
+    /// the disc. The XEX region flags list more than some discs carry (the
+    /// "pal_it" disc only has English, German and Italian).
     /// </summary>
     public static class LanguageManifest
     {
@@ -31,8 +28,7 @@ namespace DantesInferno
         }
 
         /// <summary>
-        /// Returns the text languages declared by the disc manifest, or null
-        /// if no manifest was found/parsed.
+        /// The disc's text languages, or null without a readable manifest.
         /// </summary>
         public static List<Entry> GetDiscTextLanguages(string gameDir)
         {
@@ -92,7 +88,6 @@ namespace DantesInferno
             }
             catch
             {
-                // Corrupt/inaccessible archive - treat as "no manifest".
             }
             return null;
         }

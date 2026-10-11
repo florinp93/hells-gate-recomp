@@ -150,29 +150,28 @@ card) with zero visible corruption.
 
 ## 4. Graphics/quality cvars actually available
 
-Cross-referenced against `docs/improvements_plan.md`'s cvar survey (accurate
-- matches what's in `thirdparty/rexglue-sdk/src/graphics/` and `src/ui/`).
 Two things worth calling out for the Linux setup specifically:
 
 - **GPU cvars must be CLI flags, same class of issue as `game_data_root`,
   different cause:** `resolution_scale`, `anisotropic_override`,
   `swap_post_effect`, etc. live inside `rexgpu-xenos.dll`, which isn't loaded
   until *after* `OnPreSetup()` returns - so `rex::cvar::SetFlagByName()`
-  calls made from `OnPreSetup` (as `improvements_plan.md §2.7` suggests)
-  silently fail because the cvar doesn't exist yet. CLI args work because
+  calls made from `OnPreSetup` silently fail because the cvar doesn't exist yet. CLI args work because
   `cvar::Init()` stashes unrecognized `--name=value` pairs as pending values,
   applied automatically once the owning plugin registers the cvar later - a
   TOML-file value has no equivalent pending-application mechanism for cvars
-  not yet registered at `LoadConfig()` time. (`REXCVAR_SET()`, used elsewhere
-  in that doc, may go through the same pending-value path as CLI args rather
+  not yet registered at `LoadConfig()` time. (`REXCVAR_SET()` may go through the same pending-value path as CLI args rather
   than `SetFlagByName()`'s immediate-only one - not verified here, but worth
   checking before relying on `OnPreSetup` to configure these.)
 - **FidelityFX (CAS/FSR) is off by default** (`-DREXGLUE_ENABLE_FIDELITYFX=ON`
   at configure time to enable `present_effect=cas/fsr/fsr2/fsr3` - marked
   "experimental" in the SDK's own `CMakeLists.txt`; not tested on Linux here).
 
-Recipe used for the Linux build (see `scripts/run-linux.sh`), no rebuild
-required beyond the vector-instruction fix above:
+`scripts/run-linux.sh` now starts the game with the native renderer
+(`--renderer=dante`, DiligentCore on Vulkan), which doesn't go through
+vkd3d-proton; of the flags below it only uses `anisotropic_override`. With the emulated
+renderer (`--renderer=xenos`), this recipe was used, no rebuild required
+beyond the vector-instruction fix above:
 
 ```
 --draw_resolution_scale_x=2 --draw_resolution_scale_y=2   # 2560x1440 internal
@@ -190,11 +189,16 @@ port on the same hardware (`ac6recomp`) measured a steep performance cliff at
 
 ```
 dantes_inferno.exe
-rexruntime.dll  TracyClient.dll  rexgpu-xenos.dll
+rexruntime.dll  TracyClient.dll  rexgpu-xenos.dll  # rexgpu-xenos also keeps sync under renderer=dante
 game/                    # default.xex, bigfile0.viv, bigfile1.viv, avatarassetpack, nxeart
 scripts/run-linux.sh     # see below
 ```
 
 `scripts/run-linux.sh` is a generic version of the launcher script used for
 testing - dedicated Proton prefix next to the game (survives reboots, unlike
-`/tmp`), first-run-builds-prefix handling, and the CLI flags from §3-4 above.
+`/tmp`), first-run-builds-prefix handling, and `--renderer=dante` plus
+`--game_data_root` (§3). Extra arguments are passed to the game.
+
+The Qt launcher in `launcher-linux/` is for the native Linux build: it is
+built with the game when Qt 6.4+ is found (`DANTESINFERNO_BUILD_LAUNCHER`,
+on by default) and packaged by `packaging/appimage/`.

@@ -36,15 +36,20 @@ endif()
 
 set(DANTESINFERNO_SOURCES
     src/main.cpp
+    src/frame_rate_hooks.cpp
     # D3D hooks: strong overrides of the generated weak aliases, so in the exe.
-    src/native_renderer/d3d_trace.cpp
-    src/native_renderer/native_observer.cpp
-    src/native_renderer/gpu_state.cpp
+    src/renderer/d3d_hooks.cpp
+    src/renderer/renderdoc_capture.cpp
+    src/renderer/state_verifier.cpp
+    src/renderer/guest_gpu_state.cpp
 )
 
 if(WIN32)
     list(APPEND DANTESINFERNO_SOURCES src/dantes_inferno.rc)
     add_executable(dantes_inferno WIN32 ${DANTESINFERNO_SOURCES})
+    # A PDB in every build, so crash reports' addresses map to function names
+    # (archived per release, not shipped).
+    target_link_options(dantes_inferno PRIVATE "LINKER:/DEBUG")
 else()
     add_executable(dantes_inferno ${DANTESINFERNO_SOURCES})
 endif()
@@ -86,28 +91,28 @@ if(DANTESINFERNO_NATIVE_RENDERER)
     # The SDK's Vulkan stack (REXGLUE_USE_VULKAN) brings its own glslang /
     # SPIRV-Headers targets whose names collide with DiligentCore's vendored
     # copies (target names are global). DiligentCore is therefore built without
-    # glslang/SPIRV-Tools; HLSL is compiled to SPIR-V at runtime via the SDK's
-    # glslang in native_device.cpp instead.
+    # glslang/SPIRV-Tools; GLSL is compiled to SPIR-V at runtime with the SDK's
+    # glslang in vulkan_device.cpp instead.
     set(DILIGENT_NO_GLSLANG ON CACHE BOOL "Disable glslang in DiligentCore" FORCE)
 
     add_subdirectory("${DILIGENT_CORE_DIR}" "${CMAKE_BINARY_DIR}/diligent-core" EXCLUDE_FROM_ALL)
 
-    add_library(dante_native_renderer STATIC
-        src/native_renderer/dante_device.cpp
-        src/native_renderer/dante_draws.cpp
-        src/native_renderer/dante_dump.cpp
-        src/native_renderer/dante_shaders.cpp
-        src/native_renderer/dante_textures.cpp
-        src/native_renderer/dante_graphics_system.cpp
-        src/native_renderer/native_device.cpp
-        src/native_renderer/native_renderer_integration.cpp
-        src/native_renderer/native_presenter.cpp
+    add_library(dante_renderer STATIC
+        src/renderer/renderer.cpp
+        src/renderer/draw_renderer.cpp
+        src/renderer/png_dump.cpp
+        src/renderer/button_glyphs.cpp
+        src/renderer/shader_cache.cpp
+        src/renderer/smaa_pass.cpp
+        src/renderer/texture_cache.cpp
+        src/renderer/renderer_config.cpp
+        src/renderer/vulkan_device.cpp
     )
-    target_include_directories(dante_native_renderer PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/native_renderer"
+    target_include_directories(dante_renderer PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
-    target_include_directories(dante_native_renderer PRIVATE
+    target_include_directories(dante_renderer PRIVATE
         "${DILIGENT_CORE_DIR}"
         "${DILIGENT_CORE_DIR}/Graphics"
         "${DILIGENT_CORE_DIR}/Graphics/GraphicsEngine/interface"
@@ -117,7 +122,7 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         "${DILIGENT_CORE_DIR}/Primitives/interface"
         "${DILIGENT_CORE_DIR}/Common/interface"
     )
-    target_link_libraries(dante_native_renderer PRIVATE
+    target_link_libraries(dante_renderer PRIVATE
         Diligent-GraphicsEngineVk-static
         Diligent-GraphicsTools
         Diligent-Common
@@ -189,21 +194,23 @@ if(DANTESINFERNO_NATIVE_RENDERER)
             OSDependent
             OGLCompiler
         )
-        target_link_libraries(dante_native_renderer PRIVATE dante_gpu)
+        target_link_libraries(dante_renderer PRIVATE dante_gpu)
+        # GDI renders the button glyph labels (button_glyphs.cpp).
+        target_link_libraries(dante_renderer PRIVATE gdi32)
 
-        # glslang for runtime HLSL->SPIR-V compilation in native_device.cpp
+        # glslang for runtime GLSL->SPIR-V compilation in vulkan_device.cpp
         # (DiligentCore is built with DILIGENT_NO_GLSLANG). ResourceLimits.cpp
         # provides glslang::DefaultTBuiltInResource, normally built by glslang's
         # StandAlone dir which ENABLE_GLSLANG_BINARIES=OFF skips.
-        target_sources(dante_native_renderer PRIVATE
+        target_sources(dante_renderer PRIVATE
             ${REXSDK_DIR}/thirdparty/glslang/StandAlone/ResourceLimits.cpp
         )
-        target_include_directories(dante_native_renderer PRIVATE
+        target_include_directories(dante_renderer PRIVATE
             ${REXSDK_DIR}/thirdparty/glslang
             ${REXSDK_DIR}/thirdparty/glslang/StandAlone
             ${REXSDK_DIR}/thirdparty/renderdoc
         )
-        target_link_libraries(dante_native_renderer PRIVATE
+        target_link_libraries(dante_renderer PRIVATE
             xxHash::xxhash
             glslang::SPIRV
             glslang
@@ -217,24 +224,15 @@ if(DANTESINFERNO_NATIVE_RENDERER)
                         "renderer=native will be unavailable")
     endif()
 
-    target_link_libraries(dantes_inferno PRIVATE dante_native_renderer)
+    target_link_libraries(dantes_inferno PRIVATE dante_renderer)
     target_compile_definitions(dantes_inferno PRIVATE DANTESINFERNO_NATIVE_RENDERER)
 
-    if(WIN32)
-        add_executable(native_renderer_test
-            src/native_renderer/native_renderer_test.cpp
-        )
-        target_link_libraries(native_renderer_test PRIVATE
-            dante_native_renderer
-        )
-        target_link_libraries(native_renderer_test PRIVATE user32 gdi32)
-    endif()
-
     set(DANTESINFERNO_NATIVE_SOURCES
-        src/native_renderer/dantes_inferno_native_main.cpp
-        src/native_renderer/d3d_trace.cpp
-        src/native_renderer/native_observer.cpp
-        src/native_renderer/gpu_state.cpp
+        src/renderer/dantes_inferno_native_main.cpp
+        src/renderer/d3d_hooks.cpp
+        src/renderer/renderdoc_capture.cpp
+        src/renderer/state_verifier.cpp
+        src/renderer/guest_gpu_state.cpp
     )
     if(WIN32)
         list(APPEND DANTESINFERNO_NATIVE_SOURCES src/dantes_inferno.rc)
@@ -246,11 +244,22 @@ if(DANTESINFERNO_NATIVE_RENDERER)
     target_include_directories(dantes_inferno_native PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk/thirdparty/imgui"
     )
-    target_link_libraries(dantes_inferno_native PRIVATE dante_native_renderer)
+    target_link_libraries(dantes_inferno_native PRIVATE dante_renderer)
     target_compile_definitions(dantes_inferno_native PRIVATE DANTESINFERNO_NATIVE_RENDERER)
 
-    message(STATUS "Native renderer (DiligentCore/Vulkan) enabled")
-    message(STATUS "  Build native_renderer_test to verify clear+present")
-    message(STATUS "  Build dantes_inferno_native for game with native renderer")
-    message(STATUS "  dantes_inferno now links native presenter (use_native_presenter cvar)")
+endif()
+
+# Qt launcher for the native Linux build (packaging/appimage).
+option(DANTESINFERNO_BUILD_LAUNCHER "Build the Qt launcher (Linux)" ON)
+option(DANTESINFERNO_LAUNCHER_BUILD_TESTS "Build the Qt launcher tests" ON)
+if(DANTESINFERNO_BUILD_LAUNCHER AND UNIX AND NOT APPLE)
+    find_package(Qt6 6.4 COMPONENTS Core Gui Widgets QUIET)
+    if(Qt6_FOUND)
+        if(DANTESINFERNO_LAUNCHER_BUILD_TESTS)
+            enable_testing()
+        endif()
+        add_subdirectory(launcher-linux)
+    else()
+        message(WARNING "Qt 6.4+ not found; dantes_inferno_launcher will not be built")
+    endif()
 endif()

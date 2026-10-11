@@ -49,7 +49,7 @@ if (Test-Path $issFile) {
     Write-Host "Updated installer.iss MyAppVersion -> $Version"
 }
 
-$gameFiles = @("dantes_inferno.exe", "dantes_inferno_native.exe", "rexruntime.dll", "rexgpu-xenos.dll", "amd_fidelityfx_dx12.dll")
+$gameFiles = @("dantes_inferno.exe", "rexruntime.dll", "rexgpu-xenos.dll", "amd_fidelityfx_dx12.dll")
 foreach ($f in $gameFiles) {
     $src = Join-Path $GameBuildDir $f
     if (-not (Test-Path $src)) {
@@ -102,6 +102,19 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Write-Host "Compiling Inno Setup installer..."
 & $iscc (Join-Path $root "installer.iss") 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
+
+# Debug symbols of this release (not shipped): map crash-log addresses to functions.
+$symbolsDir = [System.IO.Path]::GetFullPath((Join-Path $root "..\release-symbols\$Version"))
+New-Item -ItemType Directory -Path $symbolsDir -Force | Out-Null
+foreach ($f in @("dantes_inferno.exe", "dantes_inferno.pdb")) {
+    $src = Join-Path $GameBuildDir $f
+    if (Test-Path $src) {
+        Copy-Item $src $symbolsDir -Force
+    } else {
+        Write-Warning "Missing $src - crash addresses of this release cannot be symbolized."
+    }
+}
+Write-Host "Symbols archived in: $symbolsDir"
 
 Write-Host ""
 Write-Host "Installer created at: $OutputDir\DantesInfernoInstaller.exe"
