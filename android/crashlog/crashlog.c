@@ -82,10 +82,13 @@ JNIEXPORT void JNICALL Java_dev_hellsgate_android_DiagLog_installNative(JNIEnv* 
 #include <stdlib.h>
 
 #define PROF_MAX 20000
+#define PROF_DEPTH 12
 static volatile uintptr_t prof_pc[PROF_MAX];
 static volatile uintptr_t prof_lr[PROF_MAX];
+static volatile uintptr_t prof_stack[PROF_MAX][PROF_DEPTH];
 static volatile int prof_n;
 static volatile int prof_tid;
+static uintptr_t prof_stack_lo, prof_stack_hi;
 
 static void prof_handler(int sig, siginfo_t* si, void* uc_) {
   (void)sig; (void)si;
@@ -94,6 +97,27 @@ static void prof_handler(int sig, siginfo_t* si, void* uc_) {
   if (i < PROF_MAX) {
     prof_pc[i] = (uintptr_t)uc->uc_mcontext.pc;
     prof_lr[i] = (uintptr_t)uc->uc_mcontext.regs[30];
+    if (!prof_stack_hi) {
+      pthread_attr_t attr;
+      if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+        void* lo; size_t sz;
+        pthread_attr_getstack(&attr, &lo, &sz);
+        prof_stack_lo = (uintptr_t)lo;
+        prof_stack_hi = (uintptr_t)lo + sz;
+        pthread_attr_destroy(&attr);
+      }
+    }
+    // Frame-pointer walk, bounded to this thread's stack.
+    uintptr_t fp = (uintptr_t)uc->uc_mcontext.regs[29];
+    int d = 0;
+    while (d < PROF_DEPTH && fp >= prof_stack_lo && fp + 16 <= prof_stack_hi && !(fp & 7)) {
+      uintptr_t next = ((uintptr_t*)fp)[0];
+      uintptr_t ret = ((uintptr_t*)fp)[1];
+      prof_stack[i][d++] = ret;
+      if (next <= fp) break;
+      fp = next;
+    }
+    for (; d < PROF_DEPTH; d++) prof_stack[i][d] = 0;
   }
 }
 
@@ -137,6 +161,7 @@ static void* prof_thread(void* p) {
   free(p);
   prof_n = 0;
   prof_tid = a.tid;
+  prof_stack_lo = prof_stack_hi = 0;
   struct sigaction sa, old;
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = prof_handler;
@@ -158,6 +183,77 @@ static void* prof_thread(void* p) {
   out(buf);
   dump_hist("pc", prof_pc, n);
   dump_hist("lr", prof_lr, n);
+  // Attribute each sample to the first frame outside libc/libc++/vendor libraries
+  // (who in our code caused the libc time), and dump the top whole stacks.
+  {
+    static uintptr_t owner[PROF_MAX];
+    for (int i = 0; i < n; i++) {
+      owner[i] = prof_pc[i];
+      uintptr_t cands[PROF_DEPTH + 1];
+      cands[0] = prof_lr[i];
+      for (int d = 0; d < PROF_DEPTH; d++) cands[d + 1] = prof_stack[i][d];
+      Dl_info d0;
+      if (dladdr((void*)prof_pc[i], &d0) && d0.dli_fname &&
+          (strstr(d0.dli_fname, "/libc.so") || strstr(d0.dli_fname, "libc++") ||
+           strstr(d0.dli_fname, "/vendor/") || strstr(d0.dli_fname, "libsigchain"))) {
+        for (int k = 0; k < PROF_DEPTH + 1; k++) {
+          Dl_info dk;
+          if (!cands[k]) continue;
+          if (dladdr((void*)cands[k], &dk) && dk.dli_fname && !strstr(dk.dli_fname, "/libc.so") &&
+              !strstr(dk.dli_fname, "libc++") && !strstr(dk.dli_fname, "/vendor/") &&
+              !strstr(dk.dli_fname, "libsigchain")) {
+            owner[i] = cands[k];
+            break;
+          }
+        }
+      }
+    }
+    dump_hist("owner", owner, n);
+    // Stack chains: key = hash of pc + first 6 frames; print a representative.
+    char buf[1024];
+    out("PROFILE stacks (sample count, pc <- callers):\n");
+    static int done[PROF_MAX];
+    memset(done, 0, sizeof(int) * (size_t)n);
+    for (int printed = 0; printed < 40; printed++) {
+      int best = -1, best_count = 0;
+      for (int i = 0; i < n; i++) {
+        if (done[i]) continue;
+        int c = 0;
+        for (int j = i; j < n; j++) {
+          if (done[j] || prof_pc[j] != prof_pc[i]) continue;
+          int same = 1;
+          for (int d = 0; d < 6; d++) if (prof_stack[j][d] != prof_stack[i][d]) { same = 0; break; }
+          if (same) c++;
+        }
+        if (c > best_count) { best_count = c; best = i; }
+        if (best_count > n / 2) break;
+      }
+      if (best < 0) break;
+      for (int j = best; j < n; j++) {
+        if (prof_pc[j] != prof_pc[best]) continue;
+        int same = 1;
+        for (int d = 0; d < 6; d++) if (prof_stack[j][d] != prof_stack[best][d]) { same = 0; break; }
+        if (same) done[j] = 1;
+      }
+      int len = snprintf(buf, sizeof buf, "PROFILE stack %5d", best_count);
+      uintptr_t chain[PROF_DEPTH + 1];
+      chain[0] = prof_pc[best];
+      for (int d = 0; d < PROF_DEPTH; d++) chain[d + 1] = prof_stack[best][d];
+      for (int d = 0; d < PROF_DEPTH + 1 && len < (int)sizeof buf - 80; d++) {
+        if (!chain[d]) break;
+        Dl_info di;
+        if (dladdr((void*)chain[d], &di) && di.dli_fname) {
+          const char* b = strrchr(di.dli_fname, '/');
+          len += snprintf(buf + len, sizeof buf - (size_t)len, " %s+0x%lx", b ? b + 1 : di.dli_fname,
+                          (unsigned long)(chain[d] - (uintptr_t)di.dli_fbase));
+        } else {
+          len += snprintf(buf + len, sizeof buf - (size_t)len, " %p", (void*)chain[d]);
+        }
+      }
+      snprintf(buf + len, sizeof buf - (size_t)len, "\n");
+      out(buf);
+    }
+  }
   out("PROFILE end\n");
   return 0;
 }
