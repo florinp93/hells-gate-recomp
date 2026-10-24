@@ -26,10 +26,14 @@ public class HellsGateActivity extends SDLActivity {
     protected String[] getArguments() {
         GamePaths.userData(this).mkdirs();
         GamePaths.cache(this).mkdirs();
+        // The SDK defaults to <executable folder>/logs, which is the read-only native lib dir.
+        java.io.File logs = new java.io.File(GamePaths.root(this), "logs");
+        logs.mkdirs();
         return new String[] {
                 "--game_data_root=" + GamePaths.game(this).getAbsolutePath(),
                 "--user_data_root=" + GamePaths.userData(this).getAbsolutePath(),
                 "--cache_root=" + GamePaths.cache(this).getAbsolutePath(),
+                "--log_file=" + new java.io.File(logs, "dantes_inferno.log").getAbsolutePath(),
                 // Empty (the default) disables GPU emulation entirely.
                 "--gpu_plugin=xenos",
         };
