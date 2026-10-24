@@ -418,7 +418,7 @@ index ef5bdf4..236309d 100644
    char buff[FILENAME_MAX] = "";
    readlink("/proc/self/exe", buff, FILENAME_MAX);
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
-index b52bf39..4b4cf2f 100644
+index b52bf39..01fcde9 100644
 --- a/src/core/memory_posix.cpp
 +++ b/src/core/memory_posix.cpp
 @@ -14,7 +14,9 @@
@@ -431,7 +431,15 @@ index b52bf39..4b4cf2f 100644
  #include <string>
  
  #include <fcntl.h>
-@@ -48,13 +50,7 @@
+@@ -29,6 +31,7 @@
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
++#include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/math.h>
+ #include <rex/memory/utils.h>
+@@ -48,13 +51,7 @@
  #if REX_PLATFORM_ANDROID
  #include <string.h>
  
@@ -446,7 +454,7 @@ index b52bf39..4b4cf2f 100644
  #endif
  
  namespace rex {
-@@ -84,33 +80,6 @@ static std::string MakeShmName(const std::filesystem::path& path) {
+@@ -84,33 +81,6 @@ static std::string MakeShmName(const std::filesystem::path& path) {
    return name;
  }
  
@@ -480,7 +488,7 @@ index b52bf39..4b4cf2f 100644
  size_t page_size() {
    return getpagesize();
  }
-@@ -234,7 +203,100 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+@@ -234,7 +204,108 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
    return w ? PageAccess::kReadWrite : PageAccess::kReadOnly;
  }
  
@@ -567,7 +575,15 @@ index b52bf39..4b4cf2f 100644
 +  return true;
 +}
 +
++REXCVAR_DEFINE_BOOL(protection_shadow, true, "Memory",
++                    "Android: mirror guest page protections instead of reading /proc/self/maps "
++                    "(much faster; disable to rule it out when graphics look wrong)");
++
 +void SetProtectionShadowRange(void* base, size_t length) {
++  if (!REXCVAR_GET(protection_shadow)) {
++    REXSYS_INFO("Protection shadow disabled (--protection_shadow=false)");
++    return;
++  }
 +  const size_t page = page_size();
 +  const size_t pages = length / page;
 +  auto table = std::make_unique<std::atomic<uint8_t>[]>(pages);
@@ -581,7 +597,7 @@ index b52bf39..4b4cf2f 100644
  #endif  // REX_PLATFORM_LINUX
  
  void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
-@@ -296,6 +358,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+@@ -296,6 +367,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
  
    void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
    if (result != MAP_FAILED) {
@@ -593,7 +609,7 @@ index b52bf39..4b4cf2f 100644
      return result;
    }
  #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
-@@ -307,6 +374,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+@@ -307,6 +383,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
      // Verify the entire range is mapped before using mprotect
      if (IsRangeFullyMapped(base_address, length)) {
        if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
@@ -601,7 +617,7 @@ index b52bf39..4b4cf2f 100644
          return base_address;
        }
      }
-@@ -323,12 +391,18 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+@@ -323,12 +400,18 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
        if (mprotect(base_address, length, PROT_NONE) != 0) {
          return false;
        }
@@ -620,7 +636,7 @@ index b52bf39..4b4cf2f 100644
        return munmap(base_address, length) == 0;
      }
      default:
-@@ -357,15 +431,18 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+@@ -357,15 +440,18 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
    //             atomic in a mutli-threaded process either, but it's something to be aware of.
    // Query old access before changing, if the caller needs it
    if (out_old_access) {
@@ -642,7 +658,7 @@ index b52bf39..4b4cf2f 100644
    if (ret != 0) {
      REXSYS_ERROR("mprotect({}, 0x{:X}, {}) failed: {} ({})", base_address, length, prot,
                   strerror(errno), errno);
-@@ -416,15 +493,12 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+@@ -416,15 +502,12 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
    access_out = PageAccess::kNoAccess;
    length = 0;
  
@@ -662,7 +678,7 @@ index b52bf39..4b4cf2f 100644
    return true;
  #endif
  }
-@@ -432,28 +506,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+@@ -432,28 +515,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
  FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
                                            PageAccess access, bool commit) {
  #if REX_PLATFORM_ANDROID
@@ -698,7 +714,7 @@ index b52bf39..4b4cf2f 100644
  #else
    int oflag;
    switch (access) {
-@@ -524,11 +583,17 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
+@@ -524,11 +592,17 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
      munmap(result, length);
      return nullptr;
    }

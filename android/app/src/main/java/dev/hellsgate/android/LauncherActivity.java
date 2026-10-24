@@ -108,6 +108,14 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("classic_render_passes", on).apply());
         root.addView(rpBox);
 
+        android.widget.CheckBox shadowBox = new android.widget.CheckBox(this);
+        shadowBox.setText("Fast memory tracking (big speed-up; turn off if graphics look wrong)");
+        shadowBox.setTextColor(Color.WHITE);
+        shadowBox.setChecked(GamePaths.prefs(this).getBoolean("protection_shadow", true));
+        shadowBox.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("protection_shadow", on).apply());
+        root.addView(shadowBox);
+
         importSavesButton = new Button(this);
         importSavesButton.setText("Import saves");
         importSavesButton.setOnClickListener(v -> startActivityForResult(
