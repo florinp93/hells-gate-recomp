@@ -94,6 +94,12 @@ final class DiagLog {
         Thread t = new Thread(DiagLog::pumpLogcat, "diag-logcat");
         t.setDaemon(true);
         t.start();
+
+        // The SDK's own log file (app storage) is copied into this log as it grows.
+        final java.io.File sdkLog = new java.io.File(GamePaths.root(ctx), "logs/dantes_inferno.log");
+        Thread tail = new Thread(() -> tailFile(sdkLog), "diag-sdklog");
+        tail.setDaemon(true);
+        tail.start();
     }
 
     private static void previousExits(Context ctx) {
@@ -139,6 +145,33 @@ final class DiagLog {
             while ((s = r.readLine()) != null) line(s);
         } catch (Throwable t) {
             line("logcat pump stopped: " + t);
+        }
+    }
+
+    private static void tailFile(java.io.File f) {
+        long offset = f.exists() ? f.length() : 0;
+        byte[] buf = new byte[16384];
+        while (true) {
+            try {
+                if (f.exists()) {
+                    if (f.length() < offset) offset = 0;  // truncated or rotated
+                    try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r")) {
+                        r.seek(offset);
+                        int n;
+                        while ((n = r.read(buf)) > 0) {
+                            synchronized (DiagLog.class) {
+                                if (out != null) out.write(buf, 0, n);
+                            }
+                            offset += n;
+                        }
+                    }
+                }
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                return;
+            } catch (Throwable ignored) {
+                try { Thread.sleep(500); } catch (InterruptedException e) { return; }
+            }
         }
     }
 
