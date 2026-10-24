@@ -832,7 +832,7 @@ index 5de4b70..f4c019e 100644
      main.cpp
      ui/ui.cpp
 diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
-index 870398a..d2e15a8 100644
+index 870398a..fef8511 100644
 --- a/src/system/mmio_handler.cpp
 +++ b/src/system/mmio_handler.cpp
 @@ -28,6 +28,12 @@
@@ -848,7 +848,7 @@ index 870398a..d2e15a8 100644
  namespace rex::runtime {
  
  MMIOHandler* MMIOHandler::global_handler_ = nullptr;
-@@ -511,6 +517,25 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -511,8 +517,46 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
      memory::PageAccess cur_access;
      size_t page_length = memory::page_size();
      memory::QueryProtect(fault_host_address, page_length, cur_access);
@@ -856,8 +856,8 @@ index 870398a..d2e15a8 100644
 +    // QueryProtect answers from a shadow table on Android. Before concluding
 +    // the watch was already cleared (and retrying the access), confirm with the
 +    // kernel: a stale shadow here would re-fault forever.
-+    if (cur_access != memory::PageAccess::kNoAccess &&
-+        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
+     if (cur_access != memory::PageAccess::kNoAccess &&
+         (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
 +      memory::PageAccess kernel_access;
 +      if (memory::QueryProtectFromKernel(fault_host_address, kernel_access)) {
 +        if (kernel_access != cur_access) {
@@ -871,9 +871,68 @@ index 870398a..d2e15a8 100644
 +      }
 +    }
 +#endif
-     if (cur_access != memory::PageAccess::kNoAccess &&
-         (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
++    if (cur_access != memory::PageAccess::kNoAccess &&
++        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
++#if defined(__ANDROID__)
++      static thread_local uintptr_t abort_last = 0;
++      static thread_local uint32_t abort_repeats = 0;
++      const uintptr_t abort_page = reinterpret_cast<uintptr_t>(fault_host_address) &
++                                   ~uintptr_t(memory::page_size() - 1);
++      abort_repeats = (abort_page == abort_last) ? abort_repeats + 1 : 0;
++      abort_last = abort_page;
++      if (abort_repeats == 1000) {
++        static int abort_reports = 0;
++        if (abort_reports++ < 20) {
++          REXSYS_ERROR(
++              "FAULT LOOP (retry path): host {} guest {:08X} {} pc {:016X} access {} — page is "
++              "not protected but keeps faulting",
++              fault_host_address, fault_guest_virtual_address, is_write ? "write" : "read",
++              uint64_t(ex->pc()), int(cur_access));
++        }
++        abort_repeats = 0;
++      }
++#endif
        // Another thread has cleared this watch. Abort.
+       return true;
+     }
+@@ -524,6 +568,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+       bool handled = access_violation_callback_(std::move(lock),
+                                                 access_violation_callback_context_,
+                                                 fault_host_address, is_write);
++#if defined(__ANDROID__)
++      // Watchdog for re-fault loops: the same page faulting again and again
++      // means the callback did not lift the protection that caused the fault.
++      if (handled) {
++        static thread_local uintptr_t last_page = 0;
++        static thread_local uint32_t repeats = 0;
++        const uintptr_t page = reinterpret_cast<uintptr_t>(fault_host_address) &
++                               ~uintptr_t(memory::page_size() - 1);
++        repeats = (page == last_page) ? repeats + 1 : 0;
++        last_page = page;
++        if (repeats == 1000) {
++          memory::PageAccess shadow_access = memory::PageAccess::kNoAccess;
++          size_t len = memory::page_size();
++          memory::QueryProtect(reinterpret_cast<void*>(page), len, shadow_access);
++          memory::PageAccess kernel_access = memory::PageAccess::kNoAccess;
++          bool kernel_ok = memory::QueryProtectFromKernel(reinterpret_cast<void*>(page), kernel_access);
++          static int loop_reports = 0;
++          if (loop_reports++ < 20) {
++            REXSYS_ERROR(
++                "FAULT LOOP: host {} guest {:08X} {} (physical view: {}) after callback: "
++                "shadow {} kernel {} ({}); forcing read-write",
++                fault_host_address, fault_guest_virtual_address, is_write ? "write" : "read",
++                ex->fault_address() >= uint64_t(physical_membase_), int(shadow_access),
++                int(kernel_access), kernel_ok ? "ok" : "no mapping");
++          }
++          memory::Protect(reinterpret_cast<void*>(page), memory::page_size(),
++                          memory::PageAccess::kReadWrite, nullptr);
++          repeats = 0;
++        }
++      }
++#endif
+       if (!handled) {
+         auto rip = ex->pc();
+         bool is_null_ptr_fault = (fault_guest_virtual_address < 0x100000u);
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
 index b0c4004..c2aa7d9 100644
 --- a/src/system/xmemory.cpp
