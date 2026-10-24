@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Imports the user's own extracted game folder and starts the game. */
 public class LauncherActivity extends Activity {
     private static final int REQUEST_PICK_FOLDER = 1;
+    private static final int REQUEST_IMPORT_SAVES = 2;
+    private static final int REQUEST_EXPORT_SAVES = 3;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -30,6 +32,8 @@ public class LauncherActivity extends Activity {
     private Button importButton;
     private Button playButton;
     private Button cancelButton;
+    private Button importSavesButton;
+    private Button exportSavesButton;
     private volatile boolean importing;
 
     @Override
@@ -87,13 +91,29 @@ public class LauncherActivity extends Activity {
                 startActivity(new Intent(this, HellsGateActivity.class)));
         root.addView(playButton);
 
+        importSavesButton = new Button(this);
+        importSavesButton.setText("Import saves");
+        importSavesButton.setOnClickListener(v -> startActivityForResult(
+                new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_IMPORT_SAVES));
+        root.addView(importSavesButton);
+
+        exportSavesButton = new Button(this);
+        exportSavesButton.setText("Export saves (backup)");
+        exportSavesButton.setOnClickListener(v -> startActivityForResult(
+                new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_EXPORT_SAVES));
+        root.addView(exportSavesButton);
+
         cancelButton = new Button(this);
         cancelButton.setText("Cancel import");
         cancelButton.setVisibility(View.GONE);
         cancelButton.setOnClickListener(v -> cancelled.set(true));
         root.addView(cancelButton);
 
-        setContentView(root);
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.setBackgroundColor(Color.BLACK);
+        scroll.setFillViewport(true);
+        scroll.addView(root);
+        setContentView(scroll);
         refresh();
     }
 
@@ -101,6 +121,8 @@ public class LauncherActivity extends Activity {
         boolean ready = GamePaths.isGameImported(this);
         playButton.setEnabled(ready && !importing);
         importButton.setEnabled(!importing);
+        importSavesButton.setEnabled(!importing);
+        exportSavesButton.setEnabled(!importing);
         if (!importing) {
             status.setText(ready ? "Game imported. Ready to play."
                                  : "No game imported yet.");
@@ -115,9 +137,26 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_PICK_FOLDER && resultCode == RESULT_OK && data != null
-                && data.getData() != null) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (requestCode == REQUEST_PICK_FOLDER) {
             startImport(data.getData());
+        } else if (requestCode == REQUEST_IMPORT_SAVES || requestCode == REQUEST_EXPORT_SAVES) {
+            final boolean export = requestCode == REQUEST_EXPORT_SAVES;
+            final Uri tree = data.getData();
+            status.setText(export ? "Exporting saves..." : "Importing saves...");
+            new Thread(() -> {
+                String msg;
+                try {
+                    msg = export ? SaveTransfer.exportSaves(this, tree)
+                                 : SaveTransfer.importSaves(this, tree);
+                } catch (Exception e) {
+                    msg = (export ? "Export failed: " : "Import failed: ")
+                            + (e.getMessage() != null ? e.getMessage() : e.toString());
+                }
+                DiagLog.line("Saves: " + msg);
+                final String m = msg;
+                ui.post(() -> status.setText(m));
+            }, "save-transfer").start();
         }
     }
 

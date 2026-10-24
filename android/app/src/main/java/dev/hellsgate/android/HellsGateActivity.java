@@ -53,6 +53,9 @@ public class HellsGateActivity extends SDLActivity {
                 "--log_file=" + new java.io.File(logs, "dantes_inferno.log").getAbsolutePath(),
                 // Empty (the default) disables GPU emulation entirely.
                 "--gpu_plugin=xenos",
+                // Diagnostic that scans every draw's indices on the CPU and logs hundreds of
+                // warnings per second in this game; far too costly on a phone.
+                "--vfetch_oob_trace=false",
         };
     }
 }

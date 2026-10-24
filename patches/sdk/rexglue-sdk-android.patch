@@ -858,24 +858,10 @@ index 2a25838..d29e8f3 100644
    // Make sure PlatformQuitFromUIThread is called only once, not from nested
    // pending function execution during the quit - otherwise it will be called
 diff --git a/src/ui/windowed_app_context_sdl.cpp b/src/ui/windowed_app_context_sdl.cpp
-index dc0b4c2..8cf0f62 100644
+index dc0b4c2..42ed4b4 100644
 --- a/src/ui/windowed_app_context_sdl.cpp
 +++ b/src/ui/windowed_app_context_sdl.cpp
-@@ -97,6 +97,13 @@ int SDLWindowedAppContext::RunMainMessageLoop() {
- }
- 
- void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
-+  if (event.type != wakeup_event_type_ && event.type != paint_event_type_ &&
-+      event.type != SDL_EVENT_MOUSE_MOTION && event.type != SDL_EVENT_FINGER_MOTION &&
-+      event.type != SDL_EVENT_GAMEPAD_AXIS_MOTION && event.type != SDL_EVENT_JOYSTICK_AXIS_MOTION &&
-+      event.type != SDL_EVENT_SENSOR_UPDATE && event.type != SDL_EVENT_GAMEPAD_SENSOR_UPDATE) {
-+    REXLOG_INFO("SDL event 0x{:x} (window data {} {})", static_cast<uint32_t>(event.type),
-+                event.window.data1, event.window.data2);
-+  }
-   if (event.type == wakeup_event_type_) {
-     ExecutePendingFunctionsFromUIThread();
-     return;
-@@ -193,6 +200,7 @@ bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event)
+@@ -193,6 +193,7 @@ bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event)
  }
  
  void SDLWindowedAppContext::ProcessQuitRequest() {
