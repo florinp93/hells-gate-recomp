@@ -56,9 +56,6 @@ public class HellsGateActivity extends SDLActivity {
                 // Diagnostic that scans every draw's indices on the CPU and logs hundreds of
                 // warnings per second in this game; far too costly on a phone.
                 "--vfetch_oob_trace=false",
-                // One Vulkan submission per frame instead of per PM4 primary buffer: each
-                // submission costs a large driver allocation on Adreno.
-                "--vulkan_submit_on_primary_buffer_end=false",
                 // Adreno allocates and zeroes a large block in every vkCmdBeginRendering;
                 // classic cached render passes avoid that per-pass cost.
                 "--vulkan_dynamic_rendering=false",

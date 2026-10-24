@@ -219,8 +219,13 @@ final class DiagLog {
                 }
             }
             boolean gpuTurn = profilesTaken % 2 == 1;
-            if (top != null && ((double) top[0] >= 70 || gpuTurn) && profilesTaken < 4
-                    && System.nanoTime() - lastProfile > 30_000_000_000L && nativeReady) {
+            // A thread pegged near 100% (possible hang): always allowed, every 20 s.
+            boolean pegged = top != null && (double) top[0] >= 95;
+            peggedTicks = pegged ? peggedTicks + 1 : 0;
+            boolean hang = peggedTicks >= 2 && profilesTaken < 12
+                    && System.nanoTime() - lastProfile > 20_000_000_000L;
+            if (top != null && (hang || (((double) top[0] >= 70 || gpuTurn) && profilesTaken < 4
+                    && System.nanoTime() - lastProfile > 30_000_000_000L)) && nativeReady) {
                 profilesTaken++;
                 lastProfile = System.nanoTime();
                 line("PERF: profiling thread " + top[1] + "/" + top[2] + " for 5 s");
@@ -234,6 +239,7 @@ final class DiagLog {
     }
 
     private static int profilesTaken;
+    private static int peggedTicks;
     private static long lastProfile;
     private static volatile boolean nativeReady;
 
