@@ -418,7 +418,7 @@ index ef5bdf4..236309d 100644
    char buff[FILENAME_MAX] = "";
    readlink("/proc/self/exe", buff, FILENAME_MAX);
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
-index b52bf39..842cbc4 100644
+index b52bf39..4b4cf2f 100644
 --- a/src/core/memory_posix.cpp
 +++ b/src/core/memory_posix.cpp
 @@ -14,7 +14,9 @@
@@ -480,7 +480,7 @@ index b52bf39..842cbc4 100644
  size_t page_size() {
    return getpagesize();
  }
-@@ -234,7 +203,86 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+@@ -234,7 +203,100 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
    return w ? PageAccess::kReadWrite : PageAccess::kReadOnly;
  }
  
@@ -553,6 +553,20 @@ index b52bf39..842cbc4 100644
 +
  }  // namespace
 +
++// Authoritative protection of `address` from /proc/self/maps; also overwrites
++// the shadow for that mapping. For the rare paths that must not trust the shadow.
++bool QueryProtectFromKernel(void* address, PageAccess& access) {
++  LinuxMapEntry e;
++  if (!FindEntryForAddress(address, e)) return false;
++  access = PermsToPageAccess(e.perms);
++  size_t first, last;
++  if (ShadowClip(e.start, e.end - e.start, first, last)) {
++    const uint8_t value = static_cast<uint8_t>(access);
++    for (size_t i = first; i < last; ++i) g_shadow[i].store(value, std::memory_order_relaxed);
++  }
++  return true;
++}
++
 +void SetProtectionShadowRange(void* base, size_t length) {
 +  const size_t page = page_size();
 +  const size_t pages = length / page;
@@ -567,7 +581,7 @@ index b52bf39..842cbc4 100644
  #endif  // REX_PLATFORM_LINUX
  
  void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
-@@ -296,6 +344,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+@@ -296,6 +358,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
  
    void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
    if (result != MAP_FAILED) {
@@ -579,7 +593,7 @@ index b52bf39..842cbc4 100644
      return result;
    }
  #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
-@@ -307,6 +360,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+@@ -307,6 +374,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
      // Verify the entire range is mapped before using mprotect
      if (IsRangeFullyMapped(base_address, length)) {
        if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
@@ -587,7 +601,7 @@ index b52bf39..842cbc4 100644
          return base_address;
        }
      }
-@@ -323,12 +377,18 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+@@ -323,12 +391,18 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
        if (mprotect(base_address, length, PROT_NONE) != 0) {
          return false;
        }
@@ -606,7 +620,7 @@ index b52bf39..842cbc4 100644
        return munmap(base_address, length) == 0;
      }
      default:
-@@ -357,15 +417,18 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+@@ -357,15 +431,18 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
    //             atomic in a mutli-threaded process either, but it's something to be aware of.
    // Query old access before changing, if the caller needs it
    if (out_old_access) {
@@ -628,7 +642,7 @@ index b52bf39..842cbc4 100644
    if (ret != 0) {
      REXSYS_ERROR("mprotect({}, 0x{:X}, {}) failed: {} ({})", base_address, length, prot,
                   strerror(errno), errno);
-@@ -416,15 +479,12 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+@@ -416,15 +493,12 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
    access_out = PageAccess::kNoAccess;
    length = 0;
  
@@ -648,7 +662,7 @@ index b52bf39..842cbc4 100644
    return true;
  #endif
  }
-@@ -432,28 +492,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+@@ -432,28 +506,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
  FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
                                            PageAccess access, bool commit) {
  #if REX_PLATFORM_ANDROID
@@ -684,7 +698,7 @@ index b52bf39..842cbc4 100644
  #else
    int oflag;
    switch (access) {
-@@ -524,11 +569,17 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
+@@ -524,11 +583,17 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
      munmap(result, length);
      return nullptr;
    }
@@ -817,6 +831,49 @@ index 5de4b70..f4c019e 100644
  add_executable(rexglue
      main.cpp
      ui/ui.cpp
+diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
+index 870398a..d2e15a8 100644
+--- a/src/system/mmio_handler.cpp
++++ b/src/system/mmio_handler.cpp
+@@ -28,6 +28,12 @@
+ 
+ using namespace rex::arch;
+ 
++#if defined(__ANDROID__)
++namespace rex::memory {
++bool QueryProtectFromKernel(void* address, PageAccess& access);  // memory_posix.cpp
++}
++#endif
++
+ namespace rex::runtime {
+ 
+ MMIOHandler* MMIOHandler::global_handler_ = nullptr;
+@@ -511,6 +517,25 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+     memory::PageAccess cur_access;
+     size_t page_length = memory::page_size();
+     memory::QueryProtect(fault_host_address, page_length, cur_access);
++#if defined(__ANDROID__)
++    // QueryProtect answers from a shadow table on Android. Before concluding
++    // the watch was already cleared (and retrying the access), confirm with the
++    // kernel: a stale shadow here would re-fault forever.
++    if (cur_access != memory::PageAccess::kNoAccess &&
++        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
++      memory::PageAccess kernel_access;
++      if (memory::QueryProtectFromKernel(fault_host_address, kernel_access)) {
++        if (kernel_access != cur_access) {
++          static int stale_reports = 0;
++          if (stale_reports++ < 20) {
++            REXSYS_WARN("Protection shadow was stale at {} ({} vs kernel {})", fault_host_address,
++                        int(cur_access), int(kernel_access));
++          }
++        }
++        cur_access = kernel_access;
++      }
++    }
++#endif
+     if (cur_access != memory::PageAccess::kNoAccess &&
+         (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
+       // Another thread has cleared this watch. Abort.
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
 index b0c4004..c2aa7d9 100644
 --- a/src/system/xmemory.cpp
