@@ -150,6 +150,22 @@ final class DiagLog {
 
     private static void tailFile(java.io.File f) {
         long offset = f.exists() ? f.length() : 0;
+        // The previous run's SDK log is complete on disk: copy its end first.
+        if (offset > 0) {
+            try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r")) {
+                long start = Math.max(0, offset - 256 * 1024);
+                r.seek(start);
+                byte[] prev = new byte[(int) (offset - start)];
+                r.readFully(prev);
+                line("--- previous run SDK log (last " + prev.length + " bytes of " + f + ") ---");
+                synchronized (DiagLog.class) {
+                    if (out != null) out.write(prev);
+                }
+                line("--- end previous run SDK log; live SDK log follows ---");
+            } catch (Throwable t) {
+                line("previous SDK log unreadable: " + t);
+            }
+        }
         byte[] buf = new byte[16384];
         while (true) {
             try {
@@ -166,7 +182,7 @@ final class DiagLog {
                         }
                     }
                 }
-                Thread.sleep(200);
+                Thread.sleep(50);
             } catch (InterruptedException e) {
                 return;
             } catch (Throwable ignored) {

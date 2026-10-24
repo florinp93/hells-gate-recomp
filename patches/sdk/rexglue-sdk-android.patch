@@ -653,6 +653,81 @@ index 5bd3dc5..c5d7cb8 100644
      find_package(PkgConfig REQUIRED)
      pkg_check_modules(X11_XCB REQUIRED x11-xcb)
      # Required, not optional: vulkan/api.h pulls in <wayland-client.h> on every
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..3c4836e 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -84,10 +84,15 @@ system::AchievementManager& ReXApp::achievements() const {
+ }
+ 
+ bool ReXApp::OnInitialize() {
+-  if (!SetupEnvironment())
++  if (!SetupEnvironment()) {
++    REXLOG_ERROR("OnInitialize: SetupEnvironment failed");
+     return false;
+-  if (!SetupPresentation())
++  }
++  if (!SetupPresentation()) {
++    REXLOG_ERROR("OnInitialize: SetupPresentation failed");
+     return false;
++  }
++  REXLOG_INFO("OnInitialize: presentation ready");
+ 
+   auto paths = OnFinalizePaths(resolved_defaults_, MakeResumeCallback());
+   if (!paths) {
+@@ -96,8 +101,11 @@ bool ReXApp::OnInitialize() {
+     return true;
+   }
+ 
+-  if (!ConstructRuntime(*paths))
++  if (!ConstructRuntime(*paths)) {
++    REXLOG_ERROR("OnInitialize: ConstructRuntime failed");
+     return false;
++  }
++  REXLOG_INFO("OnInitialize: runtime constructed, launching module");
+   LaunchModule();
+   return true;
+ }
+@@ -234,6 +242,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     runtime_->set_imgui_drawer(imgui_drawer_.get());
+   }
+ 
++  REXLOG_INFO("ConstructRuntime: Runtime::Setup");
+   auto status = runtime_->Setup(ppc_info_, std::move(config_));
+   if (XFAILED(status)) {
+     REXLOG_ERROR("Runtime setup failed: {:08X}", status);
+@@ -259,6 +268,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     }
+   }
+ 
++  REXLOG_INFO("ConstructRuntime: runtime set up, resolving XEX");
+   std::string xex_image = "game:\\default.xex";
+   OnLoadXexImage(xex_image);
+ 
+@@ -283,6 +293,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     }
+   }
+ 
++  REXLOG_INFO("ConstructRuntime: loading XEX");
+   status = runtime_->LoadXexImage(xex_image);
+   if (XFAILED(status)) {
+     auto msg = fmt::format("Failed to load XEX ({}): {:08X}", xex_image, status);
+@@ -291,6 +302,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     return false;
+   }
+ 
++  REXLOG_INFO("ConstructRuntime: XEX loaded");
+   OnPostLoadXexImage();
+ 
+   if (ppc_info_.rexcrt_heap) {
+@@ -300,6 +312,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     }
+   }
+ 
++  REXLOG_INFO("ConstructRuntime: post setup");
+   OnPostSetup();
+ 
+   return true;
 diff --git a/src/ui/surface_android.cpp b/src/ui/surface_android.cpp
 new file mode 100644
 index 0000000..303649b
@@ -809,10 +884,27 @@ index dc0b4c2..8cf0f62 100644
    // directly. Window listeners use OnClosing to stop guest, audio and GPU
    // threads; bypassing it leaves the process hanging during teardown.
 diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
-index 77bb1dc..dda019b 100644
+index 77bb1dc..00f3b5a 100644
 --- a/src/ui/windowed_app_main_sdl.cpp
 +++ b/src/ui/windowed_app_main_sdl.cpp
-@@ -124,6 +124,13 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
+@@ -66,7 +66,15 @@ int RunWindowedApp(int argc, char** argv) {
+     }
+     app->SetParsedArguments(std::move(parsed));
+ 
+-    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
++    if (app->OnInitialize()) {
++      REXLOG_INFO("Entering main message loop");
++      result = app_context.RunMainMessageLoop();
++      REXLOG_INFO("Main message loop exited ({})", result);
++    } else {
++      REXLOG_ERROR("App initialization failed; shutting down");
++      result = EXIT_FAILURE;
++    }
++    rex::FlushLogging();
+ 
+     app->InvokeOnDestroy();
+   }
+@@ -124,6 +132,13 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
    return RunWindowedApp(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
  }
  
