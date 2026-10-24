@@ -99,6 +99,14 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("show_fps", on).apply());
         root.addView(fpsBox);
 
+        android.widget.CheckBox fps30Box = new android.widget.CheckBox(this);
+        fps30Box.setText("Lock to 30 fps (steadier and cooler; menu animations run slower)");
+        fps30Box.setTextColor(Color.WHITE);
+        fps30Box.setChecked(GamePaths.prefs(this).getBoolean("lock_30fps", false));
+        fps30Box.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("lock_30fps", on).apply());
+        root.addView(fps30Box);
+
         android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
         rpBox.setText("Faster rendering (experimental: classic render passes; "
                 + "may cause wrong colours or freezes)");

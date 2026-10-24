@@ -229,19 +229,21 @@ final class DiagLog {
 
             // Sample the hottest thread while it is pegged: up to 4 profiles, 30 s apart.
             Object[] top = rows.isEmpty() ? null : rows.get(0);
-            // Alternate: hottest thread, then the GPU command processor thread.
-            if (top != null && profilesTaken % 2 == 1) {
+            // Rotate: hottest thread, GPU command processor, audio worker.
+            String want = profilesTaken % 3 == 1 ? "GPU Commands"
+                    : profilesTaken % 3 == 2 ? "Audio Worker" : null;
+            if (top != null && want != null) {
                 for (Object[] r : rows) {
-                    if (((String) r[1]).startsWith("GPU Commands")) { top = r; break; }
+                    if (((String) r[1]).startsWith(want)) { top = r; break; }
                 }
             }
-            boolean gpuTurn = profilesTaken % 2 == 1;
+            boolean gpuTurn = want != null;
             // A thread pegged near 100% (possible hang): always allowed, every 20 s.
             boolean pegged = top != null && (double) top[0] >= 95;
             peggedTicks = pegged ? peggedTicks + 1 : 0;
             boolean hang = peggedTicks >= 2 && profilesTaken < 12
                     && System.nanoTime() - lastProfile > 20_000_000_000L;
-            if (top != null && (hang || (((double) top[0] >= 70 || gpuTurn) && profilesTaken < 4
+            if (top != null && (hang || (((double) top[0] >= 70 || gpuTurn) && profilesTaken < 6
                     && System.nanoTime() - lastProfile > 30_000_000_000L)) && nativeReady) {
                 profilesTaken++;
                 lastProfile = System.nanoTime();

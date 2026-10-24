@@ -63,6 +63,9 @@ public class HellsGateActivity extends SDLActivity {
                 // Deeper audio queue (32 x 256-sample frames, ~170 ms): the default 8 underruns on
                 // phones and the gaps are heard as crackling.
                 "--audio_maxqframes=32",
+                // The game simulates at the guest video refresh rate: 30 gives a true 30 fps mode.
+                "--video_mode_refresh_rate="
+                        + (GamePaths.prefs(this).getBoolean("lock_30fps", false) ? "30" : "60"),
                 // Classic render passes avoid a large per-vkCmdBeginRendering driver allocation
                 // on Adreno (faster), but are experimental here: optional, off by default.
                 "--vulkan_dynamic_rendering="
