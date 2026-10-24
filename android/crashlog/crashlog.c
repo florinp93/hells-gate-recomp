@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <unwind.h>
 #include <ucontext.h>
+#include <malloc.h>
 
 #define MAXFRAMES 64
 typedef struct { uintptr_t pcs[MAXFRAMES]; int n; } Bt;
@@ -51,6 +52,14 @@ static void handler(int sig, siginfo_t* si, void* uc_) {
 }
 
 JNIEXPORT void JNICALL Java_dev_hellsgate_android_DiagLog_installNative(JNIEnv* e, jclass c) {
+  // The GPU thread allocates and frees large buffers every frame; without decay
+  // the allocator returns them to the OS each time (madvise + re-zeroing).
+#ifdef M_DECAY_TIME
+  int decay_ok = mallopt(M_DECAY_TIME, 1);
+  char msg[96];
+  snprintf(msg, sizeof msg, "mallopt(M_DECAY_TIME, 1) -> %d\n", decay_ok);
+  out(msg);
+#endif
   static char altstack[64 * 1024];
   stack_t ss = {.ss_sp = altstack, .ss_size = sizeof altstack, .ss_flags = 0};
   sigaltstack(&ss, 0);

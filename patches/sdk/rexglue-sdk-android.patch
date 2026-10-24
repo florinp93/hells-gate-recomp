@@ -754,6 +754,24 @@ index a595861..051ea22 100644
      find_package(PkgConfig REQUIRED)
      pkg_check_modules(WAYLAND REQUIRED wayland-client)
      target_include_directories(rexgpu-xenos PRIVATE ${WAYLAND_INCLUDE_DIRS})
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 526ebe1..426bbfd 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -1224,7 +1224,13 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+           // User wants it fast and dangerous.
+           rex::thread::MaybeYield();
+         } else {
++#if defined(__ANDROID__)
++          // Poll more finely: millisecond sleeps on Android overshoot and push
++          // frames past the next vblank (30/20 fps quantization).
++          rex::thread::Sleep(std::chrono::microseconds(200));
++#else
+           rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));
++#endif
+         }
+         rex::thread::SyncMemory();
+         ReturnFromWait();
 diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
 index 5de4b70..f4c019e 100644
 --- a/src/rexglue/CMakeLists.txt
