@@ -59,6 +59,9 @@ public class HellsGateActivity extends SDLActivity {
                 // One Vulkan submission per frame instead of per PM4 primary buffer: each
                 // submission costs a large driver allocation on Adreno.
                 "--vulkan_submit_on_primary_buffer_end=false",
+                // Adreno allocates and zeroes a large block in every vkCmdBeginRendering;
+                // classic cached render passes avoid that per-pass cost.
+                "--vulkan_dynamic_rendering=false",
                 "--show_fps_overlay=" + GamePaths.prefs(this).getBoolean("show_fps", false),
         };
     }
