@@ -832,14 +832,15 @@ index 5de4b70..f4c019e 100644
      main.cpp
      ui/ui.cpp
 diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
-index 870398a..fef8511 100644
+index 870398a..d1c3886 100644
 --- a/src/system/mmio_handler.cpp
 +++ b/src/system/mmio_handler.cpp
-@@ -28,6 +28,12 @@
+@@ -28,6 +28,13 @@
  
  using namespace rex::arch;
  
 +#if defined(__ANDROID__)
++#include <dlfcn.h>
 +namespace rex::memory {
 +bool QueryProtectFromKernel(void* address, PageAccess& access);  // memory_posix.cpp
 +}
@@ -848,7 +849,42 @@ index 870398a..fef8511 100644
  namespace rex::runtime {
  
  MMIOHandler* MMIOHandler::global_handler_ = nullptr;
-@@ -511,8 +517,46 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -487,6 +494,34 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+     return false;
+   }
+   void* fault_host_address = reinterpret_cast<void*>(ex->fault_address());
++#if defined(__ANDROID__)
++  // Fault-storm diagnostics: every 200000 faults on one thread, report the
++  // recent fault addresses and faulting host pcs (symbolized offline).
++  {
++    struct Recent { uint64_t addr; uint64_t pc; uint8_t write; };
++    static thread_local Recent recent[16];
++    static thread_local uint32_t total = 0;
++    recent[total & 15] = {ex->fault_address(), uint64_t(ex->pc()), uint8_t(is_write)};
++    if (++total % 200000 == 0) {
++      static int storm_reports = 0;
++      if (storm_reports++ < 10) {
++        REXSYS_ERROR("FAULT STORM: {} faults on this thread; last 16:", total);
++        for (int i = 0; i < 16; ++i) {
++          Dl_info d{};
++          const Recent& r = recent[i];
++          const char* lib = "?";
++          uint64_t off = r.pc;
++          if (dladdr(reinterpret_cast<void*>(r.pc), &d) && d.dli_fname) {
++            lib = strrchr(d.dli_fname, '/') ? strrchr(d.dli_fname, '/') + 1 : d.dli_fname;
++            off = r.pc - reinterpret_cast<uint64_t>(d.dli_fbase);
++          }
++          REXSYS_ERROR("  fault {} {:016X} (phys view {}) pc {}+0x{:x}", r.write ? "W" : "R",
++                       r.addr, r.addr >= uint64_t(physical_membase_), lib, off);
++        }
++      }
++    }
++  }
++#endif
+ 
+   // Access violations are pretty rare, so we can do a linear search here.
+   // Only check if in the virtual range, as we only support virtual ranges.
+@@ -511,8 +546,46 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
      memory::PageAccess cur_access;
      size_t page_length = memory::page_size();
      memory::QueryProtect(fault_host_address, page_length, cur_access);
@@ -895,7 +931,7 @@ index 870398a..fef8511 100644
        // Another thread has cleared this watch. Abort.
        return true;
      }
-@@ -524,6 +568,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -524,6 +597,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
        bool handled = access_violation_callback_(std::move(lock),
                                                  access_violation_callback_context_,
                                                  fault_host_address, is_write);
