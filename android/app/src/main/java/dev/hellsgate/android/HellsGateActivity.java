@@ -22,6 +22,13 @@ public class HellsGateActivity extends SDLActivity {
         super.onCreate(savedInstanceState);
     }
 
+    // SDL requests "full user" rotation for a resizable window, which overrides the manifest and
+    // let the game window turn portrait. Keep it landscape.
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+    }
+
     @Override
     protected String[] getArguments() {
         GamePaths.userData(this).mkdirs();

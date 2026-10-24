@@ -688,7 +688,7 @@ index 0000000..303649b
 +}  // namespace ui
 +}  // namespace rex
 diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
-index 2251429..8ad8768 100644
+index 2251429..a7fafe9 100644
 --- a/src/ui/window_sdl.cpp
 +++ b/src/ui/window_sdl.cpp
 @@ -35,6 +35,8 @@
@@ -716,6 +716,98 @@ index 2251429..8ad8768 100644
  #else
    SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window_);
    if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
+@@ -490,6 +501,7 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
+       OnRestored(destruction_receiver);
+       break;
+     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
++      REXLOG_WARN("Window close requested");
+       // SDL destroys nothing on its own; this is the veto point.
+       if (SendCloseRequestToListeners(destruction_receiver)) {
+         if (!destruction_receiver.IsWindowDestroyed()) {
+diff --git a/src/ui/windowed_app_context.cpp b/src/ui/windowed_app_context.cpp
+index 2a25838..d29e8f3 100644
+--- a/src/ui/windowed_app_context.cpp
++++ b/src/ui/windowed_app_context.cpp
+@@ -12,6 +12,12 @@
+ #include <utility>
+ 
+ #include <rex/assert.h>
++#include <rex/logging.h>
++#include <rex/platform.h>
++#if REX_PLATFORM_ANDROID
++#include <dlfcn.h>
++#include <unwind.h>
++#endif
+ #include <rex/thread.h>
+ #include <rex/ui/windowed_app_context.h>
+ 
+@@ -107,8 +113,40 @@ bool WindowedAppContext::CallInUIThreadSynchronous(std::function<void()> functio
+   return true;
+ }
+ 
++#if REX_PLATFORM_ANDROID
++namespace {
++struct QuitTrace {
++  void* pcs[32];
++  int n = 0;
++};
++_Unwind_Reason_Code QuitTraceStep(struct _Unwind_Context* c, void* arg) {
++  auto* t = static_cast<QuitTrace*>(arg);
++  if (t->n < 32) t->pcs[t->n++] = reinterpret_cast<void*>(_Unwind_GetIP(c));
++  return t->n < 32 ? _URC_NO_REASON : _URC_END_OF_STACK;
++}
++void LogQuitTrace() {
++  QuitTrace t;
++  _Unwind_Backtrace(QuitTraceStep, &t);
++  for (int i = 0; i < t.n; ++i) {
++    Dl_info d{};
++    if (dladdr(t.pcs[i], &d) && d.dli_fname) {
++      REXLOG_WARN("  quit #{:02} {}+{:#x} {}", i, d.dli_fname,
++                  reinterpret_cast<uintptr_t>(t.pcs[i]) - reinterpret_cast<uintptr_t>(d.dli_fbase),
++                  d.dli_sname ? d.dli_sname : "?");
++    } else {
++      REXLOG_WARN("  quit #{:02} {}", i, t.pcs[i]);
++    }
++  }
++}
++}  // namespace
++#endif
++
+ void WindowedAppContext::QuitFromUIThread() {
+   assert_true(IsInUIThread());
++  REXLOG_WARN("QuitFromUIThread called (has_quit={})", has_quit_);
++#if REX_PLATFORM_ANDROID
++  if (!has_quit_) LogQuitTrace();
++#endif
+   bool has_quit_previously = has_quit_;
+   // Make sure PlatformQuitFromUIThread is called only once, not from nested
+   // pending function execution during the quit - otherwise it will be called
+diff --git a/src/ui/windowed_app_context_sdl.cpp b/src/ui/windowed_app_context_sdl.cpp
+index dc0b4c2..8cf0f62 100644
+--- a/src/ui/windowed_app_context_sdl.cpp
++++ b/src/ui/windowed_app_context_sdl.cpp
+@@ -97,6 +97,13 @@ int SDLWindowedAppContext::RunMainMessageLoop() {
+ }
+ 
+ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
++  if (event.type != wakeup_event_type_ && event.type != paint_event_type_ &&
++      event.type != SDL_EVENT_MOUSE_MOTION && event.type != SDL_EVENT_FINGER_MOTION &&
++      event.type != SDL_EVENT_GAMEPAD_AXIS_MOTION && event.type != SDL_EVENT_JOYSTICK_AXIS_MOTION &&
++      event.type != SDL_EVENT_SENSOR_UPDATE && event.type != SDL_EVENT_GAMEPAD_SENSOR_UPDATE) {
++    REXLOG_INFO("SDL event 0x{:x} (window data {} {})", static_cast<uint32_t>(event.type),
++                event.window.data1, event.window.data2);
++  }
+   if (event.type == wakeup_event_type_) {
+     ExecutePendingFunctionsFromUIThread();
+     return;
+@@ -193,6 +200,7 @@ bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event)
+ }
+ 
+ void SDLWindowedAppContext::ProcessQuitRequest() {
++  REXLOG_WARN("SDL quit request (SDL_EVENT_QUIT) -> closing windows");
+   // Use the normal close-request path rather than terminating the message loop
+   // directly. Window listeners use OnClosing to stop guest, audio and GPU
+   // threads; bypassing it leaves the process hanging during teardown.
 diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
 index 77bb1dc..dda019b 100644
 --- a/src/ui/windowed_app_main_sdl.cpp
