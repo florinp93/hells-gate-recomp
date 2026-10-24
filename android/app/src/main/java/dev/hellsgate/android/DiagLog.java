@@ -78,6 +78,7 @@ final class DiagLog {
         try {
             System.loadLibrary("crashlog");
             installNative();
+            nativeReady = true;
             line("Native crash handler installed");
         } catch (Throwable t) {
             line("Native crash handler unavailable: " + t);
@@ -208,8 +209,28 @@ final class DiagLog {
                 sb.append(String.format(Locale.US, " %s/%s %.0f%%", r[1], r[2], (double) r[0]));
             }
             line(sb.toString());
+
+            // Sample the hottest thread while it is pegged: up to 4 profiles, 30 s apart.
+            Object[] top = rows.isEmpty() ? null : rows.get(0);
+            if (top != null && (double) top[0] >= 70 && profilesTaken < 4
+                    && System.nanoTime() - lastProfile > 30_000_000_000L && nativeReady) {
+                profilesTaken++;
+                lastProfile = System.nanoTime();
+                line("PERF: profiling thread " + top[1] + "/" + top[2] + " for 5 s");
+                try {
+                    profileThread(Integer.parseInt((String) top[2]), 5000);
+                } catch (Throwable t) {
+                    line("profiler unavailable: " + t);
+                }
+            }
         }
     }
+
+    private static int profilesTaken;
+    private static long lastProfile;
+    private static volatile boolean nativeReady;
+
+    private static native void profileThread(int tid, int ms);
 
     private static void tailFile(java.io.File f) {
         long offset = f.exists() ? f.length() : 0;

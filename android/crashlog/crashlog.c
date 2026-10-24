@@ -62,3 +62,103 @@ JNIEXPORT void JNICALL Java_dev_hellsgate_android_DiagLog_installNative(JNIEnv* 
   int sigs[] = {SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGSEGV, SIGTRAP};
   for (unsigned i = 0; i < sizeof sigs / sizeof *sigs; i++) sigaction(sigs[i], &sa, 0);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sampling profiler: interrupts one thread ~1000x/s with SIGPROF and records its pc and lr.
+// Results are aggregated and written to fd 2 (the Download log) as module+offset lines, which are
+// symbolized offline with the unstripped libraries.
+#include <pthread.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <stdlib.h>
+
+#define PROF_MAX 20000
+static volatile uintptr_t prof_pc[PROF_MAX];
+static volatile uintptr_t prof_lr[PROF_MAX];
+static volatile int prof_n;
+static volatile int prof_tid;
+
+static void prof_handler(int sig, siginfo_t* si, void* uc_) {
+  (void)sig; (void)si;
+  ucontext_t* uc = (ucontext_t*)uc_;
+  int i = __atomic_fetch_add(&prof_n, 1, __ATOMIC_RELAXED);
+  if (i < PROF_MAX) {
+    prof_pc[i] = (uintptr_t)uc->uc_mcontext.pc;
+    prof_lr[i] = (uintptr_t)uc->uc_mcontext.regs[30];
+  }
+}
+
+typedef struct { uintptr_t key; int count; } Bucket;
+
+static int cmp_bucket(const void* a, const void* b) {
+  return ((const Bucket*)b)->count - ((const Bucket*)a)->count;
+}
+
+static void dump_hist(const char* title, volatile uintptr_t* arr, int n) {
+  Bucket* b = (Bucket*)calloc((size_t)n + 1, sizeof(Bucket));
+  int nb = 0;
+  for (int i = 0; i < n; i++) {
+    int j;
+    for (j = 0; j < nb; j++) if (b[j].key == arr[i]) { b[j].count++; break; }
+    if (j == nb) { b[nb].key = arr[i]; b[nb].count = 1; nb++; }
+  }
+  qsort(b, (size_t)nb, sizeof(Bucket), cmp_bucket);
+  char buf[512];
+  snprintf(buf, sizeof buf, "PROFILE %s: %d samples, %d distinct\n", title, n, nb);
+  out(buf);
+  for (int i = 0; i < nb && i < 400; i++) {
+    Dl_info d;
+    if (dladdr((void*)b[i].key, &d) && d.dli_fname) {
+      const char* base = strrchr(d.dli_fname, '/');
+      snprintf(buf, sizeof buf, "PROFILE %s %5d %s+0x%lx %s\n", title, b[i].count,
+               base ? base + 1 : d.dli_fname, (unsigned long)(b[i].key - (uintptr_t)d.dli_fbase),
+               d.dli_sname ? d.dli_sname : "");
+    } else {
+      snprintf(buf, sizeof buf, "PROFILE %s %5d %p\n", title, b[i].count, (void*)b[i].key);
+    }
+    out(buf);
+  }
+  free(b);
+}
+
+typedef struct { int tid; int ms; } ProfArgs;
+
+static void* prof_thread(void* p) {
+  ProfArgs a = *(ProfArgs*)p;
+  free(p);
+  prof_n = 0;
+  prof_tid = a.tid;
+  struct sigaction sa, old;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = prof_handler;
+  sa.sa_flags = SA_SIGINFO | SA_RESTART;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGPROF, &sa, &old);
+  pid_t pid = getpid();
+  struct timespec ts = {0, 1000000};
+  for (int t = 0; t < a.ms && prof_n < PROF_MAX; t++) {
+    if (syscall(SYS_tgkill, pid, a.tid, SIGPROF) != 0) break;
+    nanosleep(&ts, 0);
+  }
+  struct timespec settle = {0, 20000000};
+  nanosleep(&settle, 0);
+  sigaction(SIGPROF, &old, 0);
+  int n = prof_n < PROF_MAX ? prof_n : PROF_MAX;
+  char buf[128];
+  snprintf(buf, sizeof buf, "PROFILE begin tid %d\n", a.tid);
+  out(buf);
+  dump_hist("pc", prof_pc, n);
+  dump_hist("lr", prof_lr, n);
+  out("PROFILE end\n");
+  return 0;
+}
+
+JNIEXPORT void JNICALL Java_dev_hellsgate_android_DiagLog_profileThread(JNIEnv* e, jclass c,
+                                                                        jint tid, jint ms) {
+  (void)e; (void)c;
+  ProfArgs* a = (ProfArgs*)malloc(sizeof(ProfArgs));
+  a->tid = tid;
+  a->ms = ms;
+  pthread_t th;
+  if (pthread_create(&th, 0, prof_thread, a) == 0) pthread_detach(th);
+}
