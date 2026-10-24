@@ -20,7 +20,17 @@ public class HellsGateActivity extends SDLActivity {
             return;
         }
         super.onCreate(savedInstanceState);
+        if (mLayout != null) {
+            touchControls = new TouchControlsView(this);
+            mLayout.addView(touchControls, new android.widget.RelativeLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+            // Register the virtual pad once SDL is running so the game sees it from the start.
+            touchControls.postDelayed(TouchControlsView::registerGamepad, 3000);
+        }
     }
+
+    private TouchControlsView touchControls;
 
     // SDL requests "full user" rotation for a resizable window, which overrides the manifest and
     // let the game window turn portrait. Keep it landscape.
