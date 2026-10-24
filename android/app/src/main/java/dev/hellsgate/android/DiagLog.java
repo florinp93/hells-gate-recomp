@@ -212,7 +212,14 @@ final class DiagLog {
 
             // Sample the hottest thread while it is pegged: up to 4 profiles, 30 s apart.
             Object[] top = rows.isEmpty() ? null : rows.get(0);
-            if (top != null && (double) top[0] >= 70 && profilesTaken < 4
+            // Alternate: hottest thread, then the GPU command processor thread.
+            if (top != null && profilesTaken % 2 == 1) {
+                for (Object[] r : rows) {
+                    if (((String) r[1]).startsWith("GPU Commands")) { top = r; break; }
+                }
+            }
+            boolean gpuTurn = profilesTaken % 2 == 1;
+            if (top != null && ((double) top[0] >= 70 || gpuTurn) && profilesTaken < 4
                     && System.nanoTime() - lastProfile > 30_000_000_000L && nativeReady) {
                 profilesTaken++;
                 lastProfile = System.nanoTime();

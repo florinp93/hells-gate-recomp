@@ -418,10 +418,20 @@ index ef5bdf4..236309d 100644
    char buff[FILENAME_MAX] = "";
    readlink("/proc/self/exe", buff, FILENAME_MAX);
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
-index b52bf39..cfac977 100644
+index b52bf39..842cbc4 100644
 --- a/src/core/memory_posix.cpp
 +++ b/src/core/memory_posix.cpp
-@@ -48,13 +48,7 @@
+@@ -14,7 +14,9 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <fstream>
++#include <atomic>
+ #include <functional>
++#include <memory>
+ #include <string>
+ 
+ #include <fcntl.h>
+@@ -48,13 +50,7 @@
  #if REX_PLATFORM_ANDROID
  #include <string.h>
  
@@ -436,7 +446,7 @@ index b52bf39..cfac977 100644
  #endif
  
  namespace rex {
-@@ -84,33 +78,6 @@ static std::string MakeShmName(const std::filesystem::path& path) {
+@@ -84,33 +80,6 @@ static std::string MakeShmName(const std::filesystem::path& path) {
    return name;
  }
  
@@ -470,7 +480,175 @@ index b52bf39..cfac977 100644
  size_t page_size() {
    return getpagesize();
  }
-@@ -432,28 +399,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+@@ -234,7 +203,86 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+   return w ? PageAccess::kReadWrite : PageAccess::kReadOnly;
+ }
+ 
++// Protection shadow for the guest arena. Reading /proc/self/maps costs a full
++// kernel render of every mapping (thousands on Android) and GPU write-watch
++// faults query protection constantly, so protections set through this file are
++// mirrored here. Pages start unknown and are filled lazily from /proc/self/maps.
++constexpr uint8_t kShadowUnknown = 0xFF;
++std::unique_ptr<std::atomic<uint8_t>[]> g_shadow;
++uintptr_t g_shadow_begin = 0;
++uintptr_t g_shadow_end = 0;
++size_t g_shadow_page = 4096;
++
++// Pages of [base, base+length) that fall in the shadow, as [first, last).
++bool ShadowClip(uintptr_t base, size_t length, size_t& first, size_t& last) {
++  if (!g_shadow || length == 0) return false;
++  uintptr_t b = base, e = base + length;
++  if (e <= g_shadow_begin || b >= g_shadow_end) return false;
++  if (b < g_shadow_begin) b = g_shadow_begin;
++  if (e > g_shadow_end) e = g_shadow_end;
++  first = (b - g_shadow_begin) / g_shadow_page;
++  last = (e - g_shadow_begin + g_shadow_page - 1) / g_shadow_page;
++  return first < last;
++}
++
++void ShadowSet(void* base, size_t length, uint8_t value) {
++  size_t first, last;
++  if (!ShadowClip(reinterpret_cast<uintptr_t>(base), length, first, last)) return;
++  for (size_t i = first; i < last; ++i) g_shadow[i].store(value, std::memory_order_relaxed);
++}
++
++void ShadowFill(const LinuxMapEntry& e) {
++  size_t first, last;
++  if (!ShadowClip(e.start, e.end - e.start, first, last)) return;
++  const uint8_t value = static_cast<uint8_t>(PermsToPageAccess(e.perms));
++  for (size_t i = first; i < last; ++i) {
++    uint8_t expected = kShadowUnknown;
++    g_shadow[i].compare_exchange_strong(expected, value, std::memory_order_relaxed);
++  }
++}
++
++// Known protection of the page holding `address`; run = bytes from `address`
++// with the same protection (bounded scan).
++bool ShadowGet(void* address, PageAccess& access, size_t* run) {
++  const uintptr_t a = reinterpret_cast<uintptr_t>(address);
++  if (!g_shadow || a < g_shadow_begin || a >= g_shadow_end) return false;
++  size_t i = (a - g_shadow_begin) / g_shadow_page;
++  const uint8_t v = g_shadow[i].load(std::memory_order_relaxed);
++  if (v == kShadowUnknown) return false;
++  access = static_cast<PageAccess>(v);
++  if (run) {
++    const size_t pages = (g_shadow_end - g_shadow_begin) / g_shadow_page;
++    size_t j = i + 1;
++    while (j < pages && j < i + 256 && g_shadow[j].load(std::memory_order_relaxed) == v) ++j;
++    *run = g_shadow_begin + j * g_shadow_page - a;
++  }
++  return true;
++}
++
++// Protection of `address`, from the shadow or (filling it) /proc/self/maps.
++bool LookupProtection(void* address, PageAccess& access, size_t* run) {
++  if (ShadowGet(address, access, run)) return true;
++  LinuxMapEntry e;
++  if (!FindEntryForAddress(address, e)) return false;
++  ShadowFill(e);
++  access = PermsToPageAccess(e.perms);
++  if (run) *run = e.end - reinterpret_cast<uintptr_t>(address);
++  return true;
++}
++
+ }  // namespace
++
++void SetProtectionShadowRange(void* base, size_t length) {
++  const size_t page = page_size();
++  const size_t pages = length / page;
++  auto table = std::make_unique<std::atomic<uint8_t>[]>(pages);
++  for (size_t i = 0; i < pages; ++i) table[i].store(kShadowUnknown, std::memory_order_relaxed);
++  g_shadow_page = page;
++  g_shadow_begin = reinterpret_cast<uintptr_t>(base);
++  g_shadow_end = g_shadow_begin + pages * page;
++  g_shadow = std::move(table);
++  REXSYS_INFO("Protection shadow: {} pages at {}", pages, base);
++}
+ #endif  // REX_PLATFORM_LINUX
+ 
+ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
+@@ -296,6 +344,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+ 
+   void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
+   if (result != MAP_FAILED) {
++#if REX_PLATFORM_LINUX
++    ShadowSet(result, length,
++              allocation_type == AllocationType::kReserve ? uint8_t(PageAccess::kNoAccess)
++                                                          : uint8_t(access));
++#endif
+     return result;
+   }
+ #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
+@@ -307,6 +360,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+     // Verify the entire range is mapped before using mprotect
+     if (IsRangeFullyMapped(base_address, length)) {
+       if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
++        ShadowSet(base_address, length, uint8_t(access));
+         return base_address;
+       }
+     }
+@@ -323,12 +377,18 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+       if (mprotect(base_address, length, PROT_NONE) != 0) {
+         return false;
+       }
++#if REX_PLATFORM_LINUX
++      ShadowSet(base_address, length, uint8_t(PageAccess::kNoAccess));
++#endif
+ #if defined(MADV_DONTNEED)
+       (void)madvise(base_address, length, MADV_DONTNEED);
+ #endif
+       return true;
+     }
+     case DeallocationType::kRelease: {
++#if REX_PLATFORM_LINUX
++      ShadowSet(base_address, length, kShadowUnknown);
++#endif
+       return munmap(base_address, length) == 0;
+     }
+     default:
+@@ -357,15 +417,18 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+   //             atomic in a mutli-threaded process either, but it's something to be aware of.
+   // Query old access before changing, if the caller needs it
+   if (out_old_access) {
+-    LinuxMapEntry e;
+-    if (FindEntryForAddress(base_address, e)) {
+-      *out_old_access = PermsToPageAccess(e.perms);
++    PageAccess old;
++    if (LookupProtection(base_address, old, nullptr)) {
++      *out_old_access = old;
+     }
+   }
+ #endif
+ 
+   uint32_t prot = ToPosixProtectFlags(access);
+   int ret = mprotect(base_address, length, prot);
++#if REX_PLATFORM_LINUX
++  ShadowSet(base_address, length, ret == 0 ? uint8_t(access) : kShadowUnknown);
++#endif
+   if (ret != 0) {
+     REXSYS_ERROR("mprotect({}, 0x{:X}, {}) failed: {} ({})", base_address, length, prot,
+                  strerror(errno), errno);
+@@ -416,15 +479,12 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+   access_out = PageAccess::kNoAccess;
+   length = 0;
+ 
+-  LinuxMapEntry e;
+-  if (!FindEntryForAddress(base_address, e)) {
++  size_t run = 0;
++  if (!LookupProtection(base_address, access_out, &run)) {
++    access_out = PageAccess::kNoAccess;
+     return false;
+   }
+-
+-  const uintptr_t addr = reinterpret_cast<uintptr_t>(base_address);
+-  length = static_cast<size_t>(e.end - addr);
+-  access_out = PermsToPageAccess(e.perms);
+-
++  length = run;
+   return true;
+ #endif
+ }
+@@ -432,28 +492,13 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
  FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
                                            PageAccess access, bool commit) {
  #if REX_PLATFORM_ANDROID
@@ -506,6 +684,24 @@ index b52bf39..cfac977 100644
  #else
    int oflag;
    switch (access) {
+@@ -524,11 +569,17 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
+     munmap(result, length);
+     return nullptr;
+   }
++#if REX_PLATFORM_LINUX
++  ShadowSet(result, length, uint8_t(access));
++#endif
+ 
+   return result;
+ }
+ 
+ bool UnmapFileView(FileMappingHandle handle, void* base_address, size_t length) {
++#if REX_PLATFORM_LINUX
++  ShadowSet(base_address, length, kShadowUnknown);
++#endif
+   return munmap(base_address, length) == 0;
+ }
+ 
 diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
 index 9ac8d15..39dd4b9 100644
 --- a/src/core/threading_posix.cpp
@@ -586,10 +782,10 @@ index 5de4b70..f4c019e 100644
      main.cpp
      ui/ui.cpp
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
-index b0c4004..e84d144 100644
+index b0c4004..c2aa7d9 100644
 --- a/src/system/xmemory.cpp
 +++ b/src/system/xmemory.cpp
-@@ -13,7 +13,7 @@
+@@ -13,10 +13,16 @@
  #include <cstring>
  #include <utility>
  
@@ -598,7 +794,16 @@ index b0c4004..e84d144 100644
  #include <sys/mman.h>
  #endif
  
-@@ -149,8 +149,8 @@ bool Memory::Initialize() {
++#if REX_PLATFORM_ANDROID
++namespace rex::memory {
++void SetProtectionShadowRange(void* base, size_t length);  // memory_posix.cpp
++}
++#endif
++
+ #include <fmt/format.h>
+ 
+ #include <rex/assert.h>
+@@ -149,8 +155,8 @@ bool Memory::Initialize() {
      return false;
    }
  
@@ -609,7 +814,7 @@ index b0c4004..e84d144 100644
    // into it with MAP_SHARED|MAP_FIXED so all views share the same backing fd.
    if (MapViewsMac()) {
      REXSYS_ERROR("Unable to find a continuous block in the 64bit address space.");
-@@ -313,7 +313,7 @@ static const struct {
+@@ -313,7 +319,7 @@ static const struct {
          0x0000000100000000ull,
      },
  };
@@ -618,8 +823,15 @@ index b0c4004..e84d144 100644
  int Memory::MapViewsMac() {
    assert_true(rex::countof(map_info) == rex::countof(views_.all_views));
  
-@@ -357,7 +357,7 @@ int Memory::MapViewsMac() {
+@@ -355,9 +361,14 @@ int Memory::MapViewsMac() {
+     views_.all_views[n] = reinterpret_cast<uint8_t*>(result);
+   }
  
++#if REX_PLATFORM_ANDROID
++  // Mirror protections of the guest arena (see memory_posix.cpp): avoids
++  // re-reading /proc/self/maps on every GPU write-watch fault.
++  rex::memory::SetProtectionShadowRange(reserved_base, total_size);
++#endif
    return 0;
  }
 -#endif  // REX_PLATFORM_MAC
