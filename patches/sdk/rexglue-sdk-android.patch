@@ -772,6 +772,24 @@ index 526ebe1..426bbfd 100644
          }
          rex::thread::SyncMemory();
          ReturnFromWait();
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 19e7170..7b0e755 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -5276,7 +5276,13 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+       VkCommandPoolCreateInfo command_pool_create_info;
+       command_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+       command_pool_create_info.pNext = nullptr;
++#if defined(__ANDROID__)
++      // Adreno frees and re-zeroes transient pools' command memory on every
++      // reset (calloc + madvise per submission); keep it instead.
++      command_pool_create_info.flags = 0;
++#else
+       command_pool_create_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
++#endif
+       command_pool_create_info.queueFamilyIndex = vulkan_device->queue_family_graphics_compute();
+       if (dfn.vkCreateCommandPool(device, &command_pool_create_info, nullptr,
+                                   &command_buffer.pool) != VK_SUCCESS) {
 diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
 index 5de4b70..f4c019e 100644
 --- a/src/rexglue/CMakeLists.txt

@@ -96,7 +96,7 @@ static void prof_handler(int sig, siginfo_t* si, void* uc_) {
   int i = __atomic_fetch_add(&prof_n, 1, __ATOMIC_RELAXED);
   if (i < PROF_MAX) {
     prof_pc[i] = (uintptr_t)uc->uc_mcontext.pc;
-    prof_lr[i] = (uintptr_t)uc->uc_mcontext.regs[30];
+    prof_lr[i] = (uintptr_t)uc->uc_mcontext.regs[30] & 0x7FFFFFFFFFull;
     if (!prof_stack_hi) {
       pthread_attr_t attr;
       if (pthread_getattr_np(pthread_self(), &attr) == 0) {
@@ -112,7 +112,8 @@ static void prof_handler(int sig, siginfo_t* si, void* uc_) {
     int d = 0;
     while (d < PROF_DEPTH && fp >= prof_stack_lo && fp + 16 <= prof_stack_hi && !(fp & 7)) {
       uintptr_t next = ((uintptr_t*)fp)[0];
-      uintptr_t ret = ((uintptr_t*)fp)[1];
+      // Strip pointer-authentication bits (39-bit user VA on these devices).
+      uintptr_t ret = ((uintptr_t*)fp)[1] & 0x7FFFFFFFFFull;
       prof_stack[i][d++] = ret;
       if (next <= fp) break;
       fp = next;
