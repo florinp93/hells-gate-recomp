@@ -56,9 +56,10 @@ public class HellsGateActivity extends SDLActivity {
                 // Diagnostic that scans every draw's indices on the CPU and logs hundreds of
                 // warnings per second in this game; far too costly on a phone.
                 "--vfetch_oob_trace=false",
-                // Adreno allocates and zeroes a large block in every vkCmdBeginRendering;
-                // classic cached render passes avoid that per-pass cost.
-                "--vulkan_dynamic_rendering=false",
+                // Classic render passes avoid a large per-vkCmdBeginRendering driver allocation
+                // on Adreno (faster), but are experimental here: optional, off by default.
+                "--vulkan_dynamic_rendering="
+                        + !GamePaths.prefs(this).getBoolean("classic_render_passes", false),
                 "--show_fps_overlay=" + GamePaths.prefs(this).getBoolean("show_fps", false),
         };
     }

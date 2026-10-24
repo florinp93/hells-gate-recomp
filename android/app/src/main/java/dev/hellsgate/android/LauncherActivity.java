@@ -99,6 +99,15 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("show_fps", on).apply());
         root.addView(fpsBox);
 
+        android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
+        rpBox.setText("Faster rendering (experimental: classic render passes; "
+                + "may cause wrong colours or freezes)");
+        rpBox.setTextColor(Color.WHITE);
+        rpBox.setChecked(GamePaths.prefs(this).getBoolean("classic_render_passes", false));
+        rpBox.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("classic_render_passes", on).apply());
+        root.addView(rpBox);
+
         importSavesButton = new Button(this);
         importSavesButton.setText("Import saves");
         importSavesButton.setOnClickListener(v -> startActivityForResult(
