@@ -167,6 +167,8 @@ final class DiagLog {
                 return;
             }
             java.util.Map<String, Long> cur = new java.util.HashMap<>();
+            java.util.Map<String, Long> curSys = new java.util.HashMap<>();
+            java.util.Map<String, String> states = new java.util.HashMap<>();
             java.util.Map<String, String> names = new java.util.HashMap<>();
             java.io.File[] tasks = new java.io.File("/proc/self/task").listFiles();
             if (tasks == null) continue;
@@ -180,6 +182,8 @@ final class DiagLog {
                     long ticks = Long.parseLong(f[11]) + Long.parseLong(f[12]);  // utime+stime
                     cur.put(t.getName(), ticks);
                     names.put(t.getName(), name);
+                    curSys.put(t.getName(), Long.parseLong(f[12]));
+                    states.put(t.getName(), f[0]);
                 } catch (Throwable ignored) {
                 }
             }
@@ -195,7 +199,20 @@ final class DiagLog {
                 total += pct;
                 if (pct >= 3) rows.add(new Object[] {pct, names.get(e.getKey()), e.getKey()});
             }
+            // For pegged threads: user vs kernel split, state, current syscall, kernel wait point.
+            StringBuilder peg = new StringBuilder();
+            for (Object[] r : rows) {
+                if ((double) r[0] < 90) continue;
+                String tid = (String) r[2];
+                Long s0 = prevSys.get(tid), s1 = curSys.get(tid);
+                double sysPct = (s0 != null && s1 != null) ? (s1 - s0) * 100.0 / hz / secs : -1;
+                peg.append(String.format(Locale.US, " [%s/%s state=%s kernel=%.0f%% syscall=%s wchan=%s]",
+                        r[1], tid, states.get(tid), sysPct, readSmall("/proc/self/task/" + tid + "/syscall"),
+                        readSmall("/proc/self/task/" + tid + "/wchan")));
+            }
+            prevSys = curSys;
             prev = cur;
+            if (peg.length() > 0) line("PERF: pegged threads:" + peg);
             if (rows.isEmpty() && total < 5) continue;
             rows.sort((a, b) -> Double.compare((double) b[0], (double) a[0]));
             StringBuilder sb = new StringBuilder();
@@ -235,6 +252,18 @@ final class DiagLog {
                     line("profiler unavailable: " + t);
                 }
             }
+        }
+    }
+
+    private static java.util.Map<String, Long> prevSys = new java.util.HashMap<>();
+
+    private static String readSmall(String path) {
+        try {
+            String v = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)),
+                    StandardCharsets.US_ASCII).trim();
+            return v.length() > 120 ? v.substring(0, 120) : v;
+        } catch (Throwable t) {
+            return "n/a";
         }
     }
 

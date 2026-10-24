@@ -56,6 +56,9 @@ public class HellsGateActivity extends SDLActivity {
                 // Diagnostic that scans every draw's indices on the CPU and logs hundreds of
                 // warnings per second in this game; far too costly on a phone.
                 "--vfetch_oob_trace=false",
+                // Sparse binding is unreliable on Adreno drivers; allocate the 512 MB guest
+                // shared-memory buffer up front instead of binding pages as levels stream in.
+                "--vulkan_sparse_shared_memory=false",
                 // Classic render passes avoid a large per-vkCmdBeginRendering driver allocation
                 // on Adreno (faster), but are experimental here: optional, off by default.
                 "--vulkan_dynamic_rendering="
