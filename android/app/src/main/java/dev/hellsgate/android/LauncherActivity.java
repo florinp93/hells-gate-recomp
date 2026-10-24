@@ -64,6 +64,12 @@ public class LauncherActivity extends Activity {
         status.setGravity(Gravity.CENTER);
         root.addView(status);
 
+        TextView logInfo = new TextView(this);
+        logInfo.setTextColor(Color.GRAY);
+        logInfo.setGravity(Gravity.CENTER);
+        logInfo.setText("Log file: " + DiagLog.displayPath);
+        root.addView(logInfo);
+
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(1000);
         progressBar.setVisibility(View.GONE);
