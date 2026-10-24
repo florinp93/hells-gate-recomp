@@ -306,6 +306,29 @@ class DantesInfernoApp : public rex::ReXApp {
 
     if (REXCVAR_GET(show_fps_overlay)) CreateFpsOverlay();
 
+#if defined(__ANDROID__)
+    // Android: log the guest frame rate every 5 s (the Java side logs per-thread CPU use).
+    perf_thread_ = std::thread([this] {
+      uint32_t last = 0;
+      auto last_t = std::chrono::steady_clock::now();
+      while (!shutting_down_.load()) {
+        for (int i = 0; i < 50 && !shutting_down_.load(); ++i)
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto* cp = GetCommandProcessor();
+        if (!cp) continue;
+        uint32_t now = cp->swap_counter();
+        auto t = std::chrono::steady_clock::now();
+        double secs = std::chrono::duration<double>(t - last_t).count();
+        if (last != 0 && secs > 0) {
+          REXLOG_INFO("PERF: guest {:.1f} fps ({} frames in {:.1f} s)", (now - last) / secs,
+                      now - last, secs);
+        }
+        last = now;
+        last_t = t;
+      }
+    });
+#endif
+
     rex::ui::RegisterBind("bind_fps_overlay", "F1", "Toggle FPS overlay", [this] {
       if (fps_overlay_) {
         fps_overlay_.reset();
@@ -496,6 +519,7 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnShutdown() override {
     shutting_down_ = true;
+    if (perf_thread_.joinable()) perf_thread_.join();
     renderer::SetOverlayFrameRequest(nullptr);
     renderer::Stop();
     overlay::ShutdownAchievementSound();
@@ -581,5 +605,6 @@ class DantesInfernoApp : public rex::ReXApp {
   overlay::AchievementToast* achievement_toast_ = nullptr;
   std::atomic<bool> overlay_frame_pending_{false};
   std::atomic<bool> shutting_down_{false};
+  std::thread perf_thread_;
   bool saved_vsync_ = true;
 };

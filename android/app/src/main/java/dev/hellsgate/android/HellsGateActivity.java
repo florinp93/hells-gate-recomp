@@ -56,6 +56,7 @@ public class HellsGateActivity extends SDLActivity {
                 // Diagnostic that scans every draw's indices on the CPU and logs hundreds of
                 // warnings per second in this game; far too costly on a phone.
                 "--vfetch_oob_trace=false",
+                "--show_fps_overlay=" + GamePaths.prefs(this).getBoolean("show_fps", false),
         };
     }
 }

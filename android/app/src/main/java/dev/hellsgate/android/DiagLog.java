@@ -95,6 +95,12 @@ final class DiagLog {
         t.setDaemon(true);
         t.start();
 
+        final android.os.PowerManager pm =
+                (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+        Thread perf = new Thread(() -> perfLoop(pm), "diag-perf");
+        perf.setDaemon(true);
+        perf.start();
+
         // The SDK's own log file (app storage) is copied into this log as it grows.
         final java.io.File sdkLog = new java.io.File(GamePaths.root(ctx), "logs/dantes_inferno.log");
         Thread tail = new Thread(() -> tailFile(sdkLog), "diag-sdklog");
@@ -145,6 +151,63 @@ final class DiagLog {
             while ((s = r.readLine()) != null) line(s);
         } catch (Throwable t) {
             line("logcat pump stopped: " + t);
+        }
+    }
+
+    /** Every 5 s: per-thread CPU use of this process (top threads) and the thermal state. */
+    private static void perfLoop(android.os.PowerManager pm) {
+        final long hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK);
+        java.util.Map<String, Long> prev = new java.util.HashMap<>();
+        long prevWall = System.nanoTime();
+        while (true) {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                return;
+            }
+            java.util.Map<String, Long> cur = new java.util.HashMap<>();
+            java.util.Map<String, String> names = new java.util.HashMap<>();
+            java.io.File[] tasks = new java.io.File("/proc/self/task").listFiles();
+            if (tasks == null) continue;
+            for (java.io.File t : tasks) {
+                try {
+                    String stat = new String(java.nio.file.Files.readAllBytes(
+                            new java.io.File(t, "stat").toPath()), StandardCharsets.US_ASCII);
+                    int l = stat.indexOf('('), r = stat.lastIndexOf(')');
+                    String name = stat.substring(l + 1, r);
+                    String[] f = stat.substring(r + 2).split(" ");
+                    long ticks = Long.parseLong(f[11]) + Long.parseLong(f[12]);  // utime+stime
+                    cur.put(t.getName(), ticks);
+                    names.put(t.getName(), name);
+                } catch (Throwable ignored) {
+                }
+            }
+            long wall = System.nanoTime();
+            double secs = (wall - prevWall) / 1e9;
+            prevWall = wall;
+            java.util.List<Object[]> rows = new java.util.ArrayList<>();
+            double total = 0;
+            for (java.util.Map.Entry<String, Long> e : cur.entrySet()) {
+                Long before = prev.get(e.getKey());
+                if (before == null) continue;
+                double pct = (e.getValue() - before) * 100.0 / hz / secs;
+                total += pct;
+                if (pct >= 3) rows.add(new Object[] {pct, names.get(e.getKey()), e.getKey()});
+            }
+            prev = cur;
+            if (rows.isEmpty() && total < 5) continue;
+            rows.sort((a, b) -> Double.compare((double) b[0], (double) a[0]));
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format(Locale.US, "PERF: process CPU %.0f%% (100%% = one core)", total));
+            if (Build.VERSION.SDK_INT >= 29 && pm != null) {
+                sb.append(", thermal ").append(pm.getCurrentThermalStatus());
+            }
+            sb.append(" | top threads:");
+            for (int i = 0; i < Math.min(8, rows.size()); i++) {
+                Object[] r = rows.get(i);
+                sb.append(String.format(Locale.US, " %s/%s %.0f%%", r[1], r[2], (double) r[0]));
+            }
+            line(sb.toString());
         }
     }
 

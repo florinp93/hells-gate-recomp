@@ -91,6 +91,14 @@ public class LauncherActivity extends Activity {
                 startActivity(new Intent(this, HellsGateActivity.class)));
         root.addView(playButton);
 
+        android.widget.CheckBox fpsBox = new android.widget.CheckBox(this);
+        fpsBox.setText("Show FPS counter in game");
+        fpsBox.setTextColor(Color.WHITE);
+        fpsBox.setChecked(GamePaths.prefs(this).getBoolean("show_fps", false));
+        fpsBox.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("show_fps", on).apply());
+        root.addView(fpsBox);
+
         importSavesButton = new Button(this);
         importSavesButton.setText("Import saves");
         importSavesButton.setOnClickListener(v -> startActivityForResult(

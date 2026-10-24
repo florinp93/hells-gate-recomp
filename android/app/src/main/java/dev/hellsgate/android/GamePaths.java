@@ -25,6 +25,10 @@ final class GamePaths {
         return new File(root(context), "cache");
     }
 
+    static android.content.SharedPreferences prefs(Context context) {
+        return context.getSharedPreferences("settings", Context.MODE_PRIVATE);
+    }
+
     static boolean isGameImported(Context context) {
         return new File(game(context), "default.xex").isFile();
     }
