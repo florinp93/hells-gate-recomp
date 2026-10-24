@@ -55,12 +55,32 @@ set(DANTESINFERNO_SOURCES
     src/renderer/guest_gpu_state.cpp
 )
 
+if(NOT DANTESINFERNO_NATIVE_RENDERER)
+    # The D3D hook layer only exists to feed the native renderer (draw hooks,
+    # state verifier, RenderDoc capture); without it the SDK's Xenos backend
+    # (rexgpu-xenos) renders and nothing calls into these.
+    list(REMOVE_ITEM DANTESINFERNO_SOURCES
+        src/renderer/d3d_hooks.cpp
+        src/renderer/renderdoc_capture.cpp
+        src/renderer/state_verifier.cpp
+        src/renderer/guest_gpu_state.cpp
+    )
+    list(APPEND DANTESINFERNO_SOURCES src/renderer/renderer_stub.cpp)
+    if(ANDROID)
+        list(APPEND DANTESINFERNO_SOURCES src/android_hook_stubs.cpp)
+    endif()
+endif()
+
 if(WIN32)
     list(APPEND DANTESINFERNO_SOURCES src/dantes_inferno.rc)
     add_executable(dantes_inferno WIN32 ${DANTESINFERNO_SOURCES})
     # A PDB in every build, so crash reports' addresses map to function names
     # (archived per release, not shipped).
     target_link_options(dantes_inferno PRIVATE "LINKER:/DEBUG")
+elseif(ANDROID)
+    # SDLActivity loads libmain.so and calls its exported SDL_main.
+    add_library(dantes_inferno SHARED ${DANTESINFERNO_SOURCES})
+    set_target_properties(dantes_inferno PROPERTIES OUTPUT_NAME main)
 else()
     add_executable(dantes_inferno ${DANTESINFERNO_SOURCES})
 endif()

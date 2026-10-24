@@ -564,8 +564,14 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   rex::graphics::CommandProcessor* GetCommandProcessor() {
+#if defined(__ANDROID__)
+    // GraphicsSystem lives in the rexgpu-xenos plugin (hidden typeinfo): no RTTI.
+    auto* graphics = static_cast<rex::graphics::GraphicsSystem*>(
+        runtime() ? runtime()->graphics_system() : nullptr);
+#else
     auto* graphics = dynamic_cast<rex::graphics::GraphicsSystem*>(
         runtime() ? runtime()->graphics_system() : nullptr);
+#endif
     return graphics ? graphics->command_processor() : nullptr;
   }
 

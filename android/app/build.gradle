@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Directories supplied by the native build (see android/README.md):
+//   -PnativeLibs=<dir>  containing arm64-v8a/{libmain,librexruntime,librexgpu-xenos,libSDL3,libc++_shared}.so
+//   -PsdlJava=<dir>     SDL's org/libsdl/app Java sources (thirdparty/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java)
+def nativeLibsDir = findProperty('nativeLibs') ?: "${projectDir}/src/main/jniLibs"
+def sdlJavaDir = findProperty('sdlJava') ?:
+        "${rootDir}/../thirdparty/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java"
+
+android {
+    namespace = 'dev.hellsgate.android'
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = 'dev.hellsgate.android'
+        minSdk = 29
+        targetSdk = 35
+        versionCode = 1
+        versionName = '0.1.0-android-preview'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+
+    sourceSets.main {
+        java.srcDir sdlJavaDir
+        jniLibs.srcDir nativeLibsDir
+    }
+
+    packaging {
+        jniLibs {
+            // The runtime locates the GPU plugin next to its own library file,
+            // which only exists on disk when native libs are extracted.
+            useLegacyPackaging = true
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            signingConfig = signingConfigs.debug
+        }
+    }
+    lint { abortOnError = false }
+}
