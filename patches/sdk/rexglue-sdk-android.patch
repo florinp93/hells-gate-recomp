@@ -848,10 +848,18 @@ index 5de4b70..f4c019e 100644
      main.cpp
      ui/ui.cpp
 diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
-index 870398a..d1c3886 100644
+index 870398a..41c652a 100644
 --- a/src/system/mmio_handler.cpp
 +++ b/src/system/mmio_handler.cpp
-@@ -28,6 +28,13 @@
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cstring>
+ #include <utility>
+ 
+@@ -28,6 +29,13 @@
  
  using namespace rex::arch;
  
@@ -865,7 +873,7 @@ index 870398a..d1c3886 100644
  namespace rex::runtime {
  
  MMIOHandler* MMIOHandler::global_handler_ = nullptr;
-@@ -487,6 +494,34 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -487,6 +495,34 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
      return false;
    }
    void* fault_host_address = reinterpret_cast<void*>(ex->fault_address());
@@ -900,11 +908,29 @@ index 870398a..d1c3886 100644
  
    // Access violations are pretty rare, so we can do a linear search here.
    // Only check if in the virtual range, as we only support virtual ranges.
-@@ -511,8 +546,46 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -511,8 +547,64 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
      memory::PageAccess cur_access;
      size_t page_length = memory::page_size();
      memory::QueryProtect(fault_host_address, page_length, cur_access);
 +#if defined(__ANDROID__)
++    // Sample the shadow against the kernel on every 32nd fault and report
++    // mismatches (in either direction) so a stale shadow can be traced.
++    {
++      static thread_local uint32_t sample = 0;
++      if ((++sample & 31) == 0) {
++        memory::PageAccess truth;
++        const memory::PageAccess shadow_said = cur_access;
++        if (memory::QueryProtectFromKernel(fault_host_address, truth) && truth != shadow_said) {
++          static std::atomic<int> mismatch_reports{0};
++          if (mismatch_reports.fetch_add(1) < 30) {
++            REXSYS_ERROR("SHADOW MISMATCH at {} (guest {:08X}, {}): shadow {} kernel {}",
++                         fault_host_address, fault_guest_virtual_address,
++                         is_write ? "write" : "read", int(shadow_said), int(truth));
++          }
++          cur_access = truth;
++        }
++      }
++    }
 +    // QueryProtect answers from a shadow table on Android. Before concluding
 +    // the watch was already cleared (and retrying the access), confirm with the
 +    // kernel: a stale shadow here would re-fault forever.
@@ -947,7 +973,7 @@ index 870398a..d1c3886 100644
        // Another thread has cleared this watch. Abort.
        return true;
      }
-@@ -524,6 +597,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -524,6 +616,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
        bool handled = access_violation_callback_(std::move(lock),
                                                  access_violation_callback_context_,
                                                  fault_host_address, is_write);

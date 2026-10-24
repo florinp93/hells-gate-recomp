@@ -109,9 +109,10 @@ public class LauncherActivity extends Activity {
         root.addView(rpBox);
 
         android.widget.CheckBox shadowBox = new android.widget.CheckBox(this);
-        shadowBox.setText("Fast memory tracking (big speed-up; turn off if graphics look wrong)");
+        shadowBox.setText("Fast memory tracking (experimental: big speed-up, but currently causes "
+                + "graphics glitches)");
         shadowBox.setTextColor(Color.WHITE);
-        shadowBox.setChecked(GamePaths.prefs(this).getBoolean("protection_shadow", true));
+        shadowBox.setChecked(GamePaths.prefs(this).getBoolean("protection_shadow", false));
         shadowBox.setOnCheckedChangeListener((b, on) ->
                 GamePaths.prefs(this).edit().putBoolean("protection_shadow", on).apply());
         root.addView(shadowBox);

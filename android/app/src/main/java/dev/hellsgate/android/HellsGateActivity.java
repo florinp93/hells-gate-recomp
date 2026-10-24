@@ -59,7 +59,10 @@ public class HellsGateActivity extends SDLActivity {
                 // Sparse binding is unreliable on Adreno drivers; allocate the 512 MB guest
                 // shared-memory buffer up front instead of binding pages as levels stream in.
                 "--vulkan_sparse_shared_memory=false",
-                "--protection_shadow=" + GamePaths.prefs(this).getBoolean("protection_shadow", true),
+                "--protection_shadow=" + GamePaths.prefs(this).getBoolean("protection_shadow", false),
+                // Deeper audio queue (32 x 256-sample frames, ~170 ms): the default 8 underruns on
+                // phones and the gaps are heard as crackling.
+                "--audio_maxqframes=32",
                 // Classic render passes avoid a large per-vkCmdBeginRendering driver allocation
                 // on Adreno (faster), but are experimental here: optional, off by default.
                 "--vulkan_dynamic_rendering="
