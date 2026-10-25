@@ -906,7 +906,7 @@ index 5de4b70..f4c019e 100644
      main.cpp
      ui/ui.cpp
 diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
-index 870398a..41c652a 100644
+index 870398a..064bebf 100644
 --- a/src/system/mmio_handler.cpp
 +++ b/src/system/mmio_handler.cpp
 @@ -10,6 +10,7 @@
@@ -966,7 +966,41 @@ index 870398a..41c652a 100644
  
    // Access violations are pretty rare, so we can do a linear search here.
    // Only check if in the virtual range, as we only support virtual ranges.
-@@ -511,8 +547,64 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -503,6 +539,33 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+       }
+     }
+   }
++#if defined(__ANDROID__)
++  // Android: ask the watch bookkeeping first. Querying the host protection
++  // means reading /proc/self/maps (thousands of mappings), far too slow to do on
++  // every write-watch fault. Only when no watch claims the fault, check whether
++  // another thread already lifted the protection (then retry the access).
++  if (!range && access_violation_callback_) {
++    auto lock = global_critical_region_.Acquire();
++    if (access_violation_callback_(std::move(lock), access_violation_callback_context_,
++                                   fault_host_address, is_write)) {
++      return true;
++    }
++    auto relock = global_critical_region_.Acquire();
++    memory::PageAccess cur_access = memory::PageAccess::kNoAccess;
++    if (!memory::QueryProtectFromKernel(fault_host_address, cur_access)) {
++      size_t page_length = memory::page_size();
++      memory::QueryProtect(fault_host_address, page_length, cur_access);
++    }
++    if (cur_access != memory::PageAccess::kNoAccess &&
++        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
++      return true;  // Already unprotected by another thread: retry.
++    }
++    REXLOG_ERROR("Access violation not handled: {} {:016X} (guest {:08X}) pc {:016X}",
++                 is_write ? "write" : "read", ex->fault_address(), fault_guest_virtual_address,
++                 uint64_t(ex->pc()));
++    return false;
++  }
++#endif
+   if (!range) {
+     // Recheck if the pages are still protected (race condition - another thread
+     // clears the watch we just hit).
+@@ -511,8 +574,64 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
      memory::PageAccess cur_access;
      size_t page_length = memory::page_size();
      memory::QueryProtect(fault_host_address, page_length, cur_access);
@@ -992,8 +1026,8 @@ index 870398a..41c652a 100644
 +    // QueryProtect answers from a shadow table on Android. Before concluding
 +    // the watch was already cleared (and retrying the access), confirm with the
 +    // kernel: a stale shadow here would re-fault forever.
-     if (cur_access != memory::PageAccess::kNoAccess &&
-         (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
++    if (cur_access != memory::PageAccess::kNoAccess &&
++        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
 +      memory::PageAccess kernel_access;
 +      if (memory::QueryProtectFromKernel(fault_host_address, kernel_access)) {
 +        if (kernel_access != cur_access) {
@@ -1007,8 +1041,8 @@ index 870398a..41c652a 100644
 +      }
 +    }
 +#endif
-+    if (cur_access != memory::PageAccess::kNoAccess &&
-+        (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
+     if (cur_access != memory::PageAccess::kNoAccess &&
+         (!is_write || cur_access != memory::PageAccess::kReadOnly)) {
 +#if defined(__ANDROID__)
 +      static thread_local uintptr_t abort_last = 0;
 +      static thread_local uint32_t abort_repeats = 0;
@@ -1031,7 +1065,7 @@ index 870398a..41c652a 100644
        // Another thread has cleared this watch. Abort.
        return true;
      }
-@@ -524,6 +616,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+@@ -524,6 +643,37 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
        bool handled = access_violation_callback_(std::move(lock),
                                                  access_violation_callback_context_,
                                                  fault_host_address, is_write);
@@ -1070,7 +1104,7 @@ index 870398a..41c652a 100644
          auto rip = ex->pc();
          bool is_null_ptr_fault = (fault_guest_virtual_address < 0x100000u);
 diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
-index b0c4004..c2aa7d9 100644
+index b0c4004..5d46e2b 100644
 --- a/src/system/xmemory.cpp
 +++ b/src/system/xmemory.cpp
 @@ -13,10 +13,16 @@
@@ -1127,6 +1161,34 @@ index b0c4004..c2aa7d9 100644
  
  int Memory::MapViews(uint8_t* mapping_base) {
    assert_true(rex::countof(map_info) == rex::countof(views_.all_views));
+@@ -1738,6 +1749,19 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
+   if (page_size_ >= memory_->system_page_size_) {
+     const uint32_t page_count = end_page_number - start_page_number + 1;
+     memory::PageAccess old_protect_access;
++#if defined(__ANDROID__)
++    // The guest-visible old protection is in the page table; asking the host
++    // reads /proc/self/maps (slow on Android) and can include write-watch state.
++    if (old_protect) {
++      *old_protect = page_table_[start_page_number].current_protect;
++    }
++    if (!rex::memory::Protect(TranslateRelative(start_page_number << page_size_shift_),
++                              page_count << page_size_shift_, ToPageAccess(protect), nullptr)) {
++      REXSYS_ERROR("BaseHeap::Protect failed due to host VirtualProtect failure");
++      return false;
++    }
++    (void)old_protect_access;
++#else
+     if (!rex::memory::Protect(TranslateRelative(start_page_number << page_size_shift_),
+                               page_count << page_size_shift_, ToPageAccess(protect),
+                               old_protect ? &old_protect_access : nullptr)) {
+@@ -1748,6 +1772,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
+     if (old_protect) {
+       *old_protect = FromPageAccess(old_protect_access);
+     }
++#endif
+   } else {
+     if (old_protect) {
+       *old_protect = page_table_[start_page_number].current_protect;
 diff --git a/src/ui/CMakeLists.txt b/src/ui/CMakeLists.txt
 index 5bd3dc5..c5d7cb8 100644
 --- a/src/ui/CMakeLists.txt
