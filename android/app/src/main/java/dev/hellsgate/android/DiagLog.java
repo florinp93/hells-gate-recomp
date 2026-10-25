@@ -96,6 +96,8 @@ final class DiagLog {
         t.setDaemon(true);
         t.start();
 
+        profilerEnabled = GamePaths.prefs(ctx).getBoolean("profiler", false);
+        line("Profiler " + (profilerEnabled ? "enabled" : "disabled"));
         final android.os.PowerManager pm =
                 (android.os.PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
         Thread perf = new Thread(() -> perfLoop(pm), "diag-perf");
@@ -251,7 +253,7 @@ final class DiagLog {
             peggedTicks = pegged ? peggedTicks + 1 : 0;
             boolean hang = peggedTicks >= 2 && profilesTaken < 12
                     && System.nanoTime() - lastProfile > 20_000_000_000L;
-            if (top != null && (hang || (((double) top[0] >= 70 || gpuTurn) && profilesTaken < 6
+            if (profilerEnabled && top != null && (hang || (((double) top[0] >= 70 || gpuTurn) && profilesTaken < 6
                     && System.nanoTime() - lastProfile > 30_000_000_000L)) && nativeReady) {
                 profilesTaken++;
                 lastProfile = System.nanoTime();
@@ -295,6 +297,8 @@ final class DiagLog {
     }
 
     private static int profilesTaken;
+    /** The sampling profiler interrupts game threads; diagnostics only (launcher option). */
+    static volatile boolean profilerEnabled;
     private static int peggedTicks;
     private static long lastProfile;
     private static volatile boolean nativeReady;

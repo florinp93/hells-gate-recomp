@@ -110,7 +110,10 @@ static void prof_handler(int sig, siginfo_t* si, void* uc_) {
     // Frame-pointer walk, bounded to this thread's stack.
     uintptr_t fp = (uintptr_t)uc->uc_mcontext.regs[29];
     int d = 0;
-    while (d < PROF_DEPTH && fp >= prof_stack_lo && fp + 16 <= prof_stack_hi && !(fp & 7)) {
+    // Bounds check without overflow (fp near UINTPTR_MAX must not wrap), and only
+    // when this thread's stack bounds are known.
+    while (d < PROF_DEPTH && prof_stack_hi > prof_stack_lo && fp >= prof_stack_lo &&
+           fp < prof_stack_hi && prof_stack_hi - fp >= 16 && !(fp & 7)) {
       uintptr_t next = ((uintptr_t*)fp)[0];
       // Strip pointer-authentication bits (39-bit user VA on these devices).
       uintptr_t ret = ((uintptr_t*)fp)[1] & 0x7FFFFFFFFFull;

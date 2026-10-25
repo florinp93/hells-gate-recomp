@@ -125,6 +125,14 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("protection_shadow", on).apply());
         root.addView(shadowBox);
 
+        android.widget.CheckBox profBox = new android.widget.CheckBox(this);
+        profBox.setText("Diagnostics: profile slow threads (for bug reports only)");
+        profBox.setTextColor(Color.GRAY);
+        profBox.setChecked(GamePaths.prefs(this).getBoolean("profiler", false));
+        profBox.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("profiler", on).apply());
+        root.addView(profBox);
+
         importSavesButton = new Button(this);
         importSavesButton.setText("Import saves");
         importSavesButton.setOnClickListener(v -> startActivityForResult(
