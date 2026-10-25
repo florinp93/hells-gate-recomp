@@ -168,6 +168,7 @@ final class DiagLog {
             }
             java.util.Map<String, Long> cur = new java.util.HashMap<>();
             java.util.Map<String, Long> curSys = new java.util.HashMap<>();
+            java.util.Map<String, Long> curFlt = new java.util.HashMap<>();
             java.util.Map<String, String> states = new java.util.HashMap<>();
             java.util.Map<String, String> names = new java.util.HashMap<>();
             java.io.File[] tasks = new java.io.File("/proc/self/task").listFiles();
@@ -183,6 +184,7 @@ final class DiagLog {
                     cur.put(t.getName(), ticks);
                     names.put(t.getName(), name);
                     curSys.put(t.getName(), Long.parseLong(f[12]));
+                    curFlt.put(t.getName(), Long.parseLong(f[7]));  // minflt
                     states.put(t.getName(), f[0]);
                 } catch (Throwable ignored) {
                 }
@@ -206,11 +208,17 @@ final class DiagLog {
                 String tid = (String) r[2];
                 Long s0 = prevSys.get(tid), s1 = curSys.get(tid);
                 double sysPct = (s0 != null && s1 != null) ? (s1 - s0) * 100.0 / hz / secs : -1;
-                peg.append(String.format(Locale.US, " [%s/%s state=%s kernel=%.0f%% syscall=%s wchan=%s]",
-                        r[1], tid, states.get(tid), sysPct, readSmall("/proc/self/task/" + tid + "/syscall"),
-                        readSmall("/proc/self/task/" + tid + "/wchan")));
+                Long f0 = prevFlt.get(tid), f1 = curFlt.get(tid);
+                long faultsPerSec = (f0 != null && f1 != null) ? (long) ((f1 - f0) / secs) : -1;
+                peg.append(String.format(Locale.US,
+                        " [%s/%s state=%s kernel=%.0f%% minflt/s=%d syscall=%s wchan=%s %s]",
+                        r[1], tid, states.get(tid), sysPct, faultsPerSec,
+                        readSmall("/proc/self/task/" + tid + "/syscall"),
+                        readSmall("/proc/self/task/" + tid + "/wchan"),
+                        statusFields("/proc/self/task/" + tid + "/status")));
             }
             prevSys = curSys;
+            prevFlt = curFlt;
             prev = cur;
             if (peg.length() > 0) line("PERF: pegged threads:" + peg);
             if (rows.isEmpty() && total < 5) continue;
@@ -258,6 +266,23 @@ final class DiagLog {
     }
 
     private static java.util.Map<String, Long> prevSys = new java.util.HashMap<>();
+    private static java.util.Map<String, Long> prevFlt = new java.util.HashMap<>();
+
+    /** SigPnd/ShdPnd/SigBlk and context switch counts from a task's status file. */
+    private static String statusFields(String path) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            for (String l : java.nio.file.Files.readAllLines(java.nio.file.Paths.get(path))) {
+                if (l.startsWith("SigPnd") || l.startsWith("ShdPnd") || l.startsWith("SigBlk")
+                        || l.startsWith("voluntary_ctxt") || l.startsWith("nonvoluntary_ctxt")) {
+                    sb.append(l.replace("\t", "").replace("_ctxt_switches", "Cs")).append(' ');
+                }
+            }
+        } catch (Throwable t) {
+            return "status n/a";
+        }
+        return sb.toString().trim();
+    }
 
     private static String readSmall(String path) {
         try {
