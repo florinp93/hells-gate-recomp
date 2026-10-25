@@ -210,6 +210,64 @@ index 1ddafd0..29fcec5 100644
  elseif(UNIX)
      target_link_libraries(rexcore PRIVATE pthread rt dl)
  endif()
+diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
+index 8b1c76a..e9f0d18 100644
+--- a/src/core/exception_handler_posix.cpp
++++ b/src/core/exception_handler_posix.cpp
+@@ -23,6 +23,9 @@
+ 
+ #include <cstdint>
+ #include <cstring>
++#include <atomic>
++#include <cstdio>
++#include <dlfcn.h>
+ 
+ #include <rex/assert.h>
+ #include <rex/logging.h>
+@@ -417,6 +420,43 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+       return;
+     }
+   }
++
++#if defined(__ANDROID__)
++  // No handler claimed the fault. Returning would re-execute the faulting
++  // instruction forever (a silent hang at 100% CPU). Report it and hand the
++  // signal to the previous handler (Android's crash reporting) instead.
++  {
++    static std::atomic<int> reports{0};
++    if (reports.fetch_add(1) < 3) {
++      uint64_t pc = 0, lr = 0;
++#if REX_ARCH_ARM64
++      pc = thread_context.pc;
++      lr = thread_context.x[30];
++#endif
++      auto describe = [](uint64_t a, char* out, size_t n) {
++        Dl_info d{};
++        if (a && dladdr(reinterpret_cast<void*>(a), &d) && d.dli_fname) {
++          const char* b = strrchr(d.dli_fname, '/');
++          snprintf(out, n, "%s+0x%llx %s", b ? b + 1 : d.dli_fname,
++                   (unsigned long long)(a - reinterpret_cast<uint64_t>(d.dli_fbase)),
++                   d.dli_sname ? d.dli_sname : "");
++        } else {
++          snprintf(out, n, "0x%llx", (unsigned long long)a);
++        }
++      };
++      char pcs[256], lrs[256];
++      describe(pc, pcs, sizeof pcs);
++      describe(lr & 0x7FFFFFFFFFull, lrs, sizeof lrs);
++      REXLOG_ERROR("UNHANDLED HOST FAULT signal {} addr {:016X} pc {} lr {}", signal_number,
++                   reinterpret_cast<uint64_t>(signal_info->si_addr), pcs, lrs);
++      rex::FlushLogging();
++    }
++    struct sigaction* original =
++        signal_number == SIGSEGV ? &original_sigsegv_handler_ : &original_sigill_handler_;
++    sigaction(signal_number, original, nullptr);
++    // Returning now re-executes the instruction under the original handler.
++  }
++#endif
+ }
+ 
+ void ExceptionHandler::Install(Handler fn, void* data) {
 diff --git a/src/core/fiber_android.cpp b/src/core/fiber_android.cpp
 new file mode 100644
 index 0000000..d9ce3cb
