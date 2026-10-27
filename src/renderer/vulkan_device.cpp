@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <SDL3/SDL.h>
 #endif
 
 #include "Graphics/GraphicsEngineVulkan/interface/EngineFactoryVk.h"
@@ -136,6 +138,7 @@ bool VulkanDevice::Initialize(void* hwnd, uint32_t width, uint32_t height) {
 
   impl_->hwnd = hwnd;
 #if defined(_WIN32)
+  Diligent::NativeWindow native_window(hwnd);
   RECT client;
   if (GetClientRect(static_cast<HWND>(hwnd), &client) && client.right > 0 && client.bottom > 0) {
     width = uint32_t(client.right);
@@ -144,6 +147,35 @@ bool VulkanDevice::Initialize(void* hwnd, uint32_t width, uint32_t height) {
   REXLOG_INFO("VulkanDevice: hwnd={} client={}x{} swapchain {}x{} visible={}", fmt::ptr(hwnd),
               client.right, client.bottom, width, height,
               hwnd ? IsWindowVisible(static_cast<HWND>(hwnd)) : false);
+#else
+  // Elsewhere hwnd is the SDL_Window*; the Vulkan surface comes from its
+  // X11 or Wayland handles.
+  auto* sdl_window = static_cast<SDL_Window*>(hwnd);
+  SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window);
+  Diligent::NativeWindow native_window;
+  if (void* wl_surface =
+          SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr)) {
+    native_window.pDisplay =
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+    native_window.pWaylandSurface = wl_surface;
+  } else {
+    native_window.pDisplay =
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+    native_window.WindowId =
+        Diligent::Uint32(SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+  }
+  if (!native_window.pWaylandSurface && native_window.WindowId == 0) {
+    REXLOG_ERROR("VulkanDevice: SDL video driver '{}' has no Wayland or X11 window",
+                 SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none");
+    return false;
+  }
+  int pixel_w = 0, pixel_h = 0;
+  if (SDL_GetWindowSizeInPixels(sdl_window, &pixel_w, &pixel_h) && pixel_w > 0 && pixel_h > 0) {
+    width = uint32_t(pixel_w);
+    height = uint32_t(pixel_h);
+  }
+  REXLOG_INFO("VulkanDevice: {} window={} swapchain {}x{}",
+              native_window.pWaylandSurface ? "wayland" : "x11", fmt::ptr(hwnd), width, height);
 #endif
 
   impl_->factory->CreateDeviceAndContextsVk(engine_ci, &impl_->device, &impl_->context);
@@ -161,8 +193,6 @@ bool VulkanDevice::Initialize(void* hwnd, uint32_t width, uint32_t height) {
   sc_desc.BufferCount = 3;
   sc_desc.DefaultDepthValue = 1.0f;
   sc_desc.IsPrimary = true;
-
-  Diligent::NativeWindow native_window(hwnd);
 
   impl_->factory->CreateSwapChainVk(impl_->device, impl_->context, sc_desc, native_window,
                                     &impl_->swapchain);
@@ -450,6 +480,17 @@ bool VulkanDevice::UpdateWindowSize() {
   if (desc.Width != uint32_t(client.right) || desc.Height != uint32_t(client.bottom)) {
     Resize(uint32_t(client.right), uint32_t(client.bottom));
     REXLOG_INFO("VulkanDevice: client resized to {}x{}", client.right, client.bottom);
+  }
+#else
+  auto* sdl_window = static_cast<SDL_Window*>(impl_->hwnd);
+  int w = 0, h = 0;
+  if ((SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MINIMIZED) ||
+      !SDL_GetWindowSizeInPixels(sdl_window, &w, &h) || w <= 0 || h <= 0)
+    return false;
+  const auto& desc = impl_->swapchain->GetDesc();
+  if (desc.Width != uint32_t(w) || desc.Height != uint32_t(h)) {
+    Resize(uint32_t(w), uint32_t(h));
+    REXLOG_INFO("VulkanDevice: client resized to {}x{}", w, h);
   }
 #endif
   return true;

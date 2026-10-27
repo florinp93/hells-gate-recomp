@@ -208,8 +208,15 @@ if(DANTESINFERNO_NATIVE_RENDERER)
             OGLCompiler
         )
         target_link_libraries(dante_renderer PRIVATE dante_gpu)
-        # GDI renders the button glyph labels (button_glyphs.cpp).
-        target_link_libraries(dante_renderer PRIVATE gdi32)
+        # GDI renders the button glyph labels (button_glyphs.cpp); elsewhere
+        # stb_truetype draws them from the font fontconfig picks.
+        if(WIN32)
+            target_link_libraries(dante_renderer PRIVATE gdi32)
+        else()
+            find_package(Fontconfig REQUIRED)
+            target_link_libraries(dante_renderer PRIVATE Fontconfig::Fontconfig)
+            target_include_directories(dante_renderer PRIVATE ${REXSDK_DIR}/thirdparty/imgui)
+        endif()
 
         # glslang for runtime GLSL->SPIR-V compilation in vulkan_device.cpp
         # (DiligentCore is built with DILIGENT_NO_GLSLANG). ResourceLimits.cpp
