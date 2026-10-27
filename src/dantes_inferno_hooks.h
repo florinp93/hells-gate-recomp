@@ -14,6 +14,8 @@
 #include <csetjmp>
 #include <cstdint>
 
+#include "guest_memory.h"
+
 inline thread_local jmp_buf g_fiber_jmp_buf;
 inline thread_local uint32_t g_setjmp_ctx_addr = 0;
 inline thread_local uint32_t g_longjmp_return_value = 0;
@@ -38,8 +40,7 @@ inline void FiberLongjmp(uint32_t return_value) {
 inline void FiberRestoreContext(PPCContext& ctx, uint8_t* base) {
   if (g_setjmp_ctx_addr == 0) return;
   uint32_t addr = g_setjmp_ctx_addr;
-  uint32_t phys_offset = (addr >= 0xE0000000u) ? 0x1000u : 0u;
-  const uint8_t* ptr = base + addr + phys_offset;
+  const uint8_t* ptr = guest::Ptr(base, addr);
   auto load64 = [&](uint32_t off) {
     return __builtin_bswap64(*reinterpret_cast<const uint64_t*>(ptr + off));
   };
