@@ -158,7 +158,7 @@ class MainWindow(QMainWindow):
         self.scan_button = QPushButton('Scan game')
         self.scan_button.clicked.connect(self.scan_game)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText('Filter by name or group (wildcards allowed, e.g. hero_*_c)')
+        self.search_edit.setPlaceholderText('Filter by name, group or hash (wildcards allowed, e.g. hero_*_c)')
         self.search_edit.textChanged.connect(self.apply_filter)
         self.format_combo = QComboBox()
         self.format_combo.addItems(FORMAT_FILTERS)
@@ -302,7 +302,8 @@ class MainWindow(QMainWindow):
         exported = {e['hash'] for e in self.manifest.values()}
         rows = [r for r in self.index.values()
                 if (not pattern or any(fnmatch.fnmatch(n.lower(), pattern)
-                                       for n in [r['name'], r['group'], *r.get('aliases', [])]))
+                                       for n in [r['name'], r['group'], r['hash'],
+                                                 *r.get('aliases', [])]))
                 and (formats is None or r['format'] in formats)
                 and max(r['width'], r['height']) >= min_size
                 and (not self.exported_check.isChecked() or r['hash'] in exported)]
@@ -413,6 +414,10 @@ class MainWindow(QMainWindow):
             return
         name = textures.safe_part(self.mod_name_edit.text().strip())
         mods_dir = self.mods_dir_edit.text()
+        if not mods_dir and self.game_edit.text():
+            install_dir = os.path.dirname(os.path.normpath(self.game_edit.text()))
+            mods_dir = os.path.join(install_dir, 'mods')
+            self.mods_dir_edit.setText(mods_dir)
         if not mods_dir:
             QMessageBox.warning(self, 'Mods folder', 'Select the mods folder first.')
             return

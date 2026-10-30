@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
+import numpy as np
 import xxhash
 from PIL import Image
 
@@ -90,10 +91,32 @@ def decode(info: TextureInfo, tg4d: bytes) -> Image.Image:
         image = Image.frombytes('RGBA', size, bc(level0, *size), 'raw', 'BGRA')
         if info.format == 'DXT1c':
             image.putalpha(255)
+        if info.format == 'DXT5_NM':
+            return normal_to_standard(image)
         return image
     if unit == 4:
         return Image.frombytes('RGBA', size, level0, 'raw', 'ARGB')
     return Image.frombytes('L', size, level0).convert('RGBA')
+
+
+def normal_to_standard(image: Image.Image) -> Image.Image:
+    pixels = np.asarray(image.convert('RGBA'), dtype=np.float32) / 127.5 - 1.0
+    x, y = pixels[..., 3], pixels[..., 1]
+    z = np.sqrt(np.clip(1.0 - x * x - y * y, 0.0, 1.0))
+    out = np.stack([x, y, z, np.ones_like(x)], axis=-1)
+    return Image.fromarray(np.round((out + 1.0) * 127.5).clip(0, 255).astype(np.uint8), 'RGBA')
+
+
+def normal_to_game(image: Image.Image) -> Image.Image:
+    pixels = np.asarray(image.convert('RGBA'), dtype=np.float32)[..., :3] / 127.5 - 1.0
+    pixels[..., 2] = np.maximum(pixels[..., 2], 0.0)
+    length = np.linalg.norm(pixels, axis=-1, keepdims=True)
+    pixels = np.where(length > 1e-6, pixels / np.maximum(length, 1e-6), [0.0, 0.0, 1.0])
+    encoded = np.round((pixels + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+    out = np.zeros(encoded.shape[:2] + (4,), np.uint8)
+    out[..., 1] = encoded[..., 1]
+    out[..., 3] = encoded[..., 0]
+    return Image.fromarray(out, 'RGBA')
 
 
 def iter_textures(str_data: bytes) -> Iterator[Tuple[int, TextureInfo, bytes]]:
@@ -262,8 +285,10 @@ def mip_chain(image: Image.Image) -> List[Image.Image]:
     return levels
 
 
-def write_dds(path: str, image: Image.Image) -> None:
+def write_dds(path: str, image: Image.Image, convert=None) -> None:
     levels = mip_chain(image.convert('RGBA'))
+    if convert:
+        levels = [convert(level) for level in levels]
     w, h = image.size
     header = struct.pack('<4s7I44x', b'DDS ', 124, 0x100F | 0x20000 | 0x8, h, w, w * 4, 0,
                          len(levels))
@@ -288,7 +313,9 @@ def build_mod(project: str, mod_dir: str, name: str, author: str, version: str,
         if image.width * entry['height'] != image.height * entry['width']:
             warnings.append(f"{rel}: {image.width}x{image.height} changes the "
                             f"{entry['width']}x{entry['height']} aspect ratio")
-        write_dds(os.path.join(out_dir, f"{safe_part(entry['name'])}_{entry['hash']}.dds"), image)
+        convert = normal_to_game if entry['format'] == 'DXT5_NM' else None
+        write_dds(os.path.join(out_dir, f"{safe_part(entry['name'])}_{entry['hash']}.dds"), image,
+                  convert)
         if not progress(i, len(changed), rel):
             break
     with open(os.path.join(mod_dir, 'mod.toml'), 'w', encoding='utf-8') as f:
