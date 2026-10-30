@@ -2,45 +2,24 @@ param(
     [string]$DiligentDir = "thirdparty\diligent-core"
 )
 
-$ErrorActionPreference = "Continue"
-$PSNativeCommandUseErrorActionPreference = $false
+$target = Join-Path (Split-Path -Parent $PSScriptRoot) $DiligentDir
+$patch = Join-Path $PSScriptRoot "diligent\diligent-core.patch"
 
-$projectRoot = Split-Path -Parent $PSScriptRoot
-$diligentPath = Join-Path $projectRoot $DiligentDir
-$patchFile = Join-Path $PSScriptRoot "diligent\diligent-core.patch"
-
-if (-not (Test-Path $diligentPath)) {
-    Write-Error "DiligentCore directory not found: $diligentPath"
+if (-not (Test-Path $target)) {
+    Write-Error "DiligentCore not found at $target"
     exit 1
 }
 
-if (-not (Test-Path $patchFile)) {
-    Write-Error "Patch file not found: $patchFile"
+git -C $target apply --reverse --check $patch 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "DiligentCore patches already applied."
+    exit 0
+}
+
+git -C $target apply $patch
+if ($LASTEXITCODE -ne 0) { git -C $target apply --3way $patch }
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to apply $patch"
     exit 1
 }
-
-Write-Host "Applying DiligentCore patches to $diligentPath ..."
-Push-Location $diligentPath
-try {
-    $reverseCheck = & git apply --reverse --check $patchFile 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "DiligentCore patches already applied."
-        Pop-Location
-        exit 0
-    }
-
-    $applyResult = & git apply $patchFile 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Attempting to apply with --3way..."
-        $applyResult = & git apply --3way $patchFile 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to apply DiligentCore patches: $applyResult"
-            Pop-Location
-            exit 1
-        }
-    }
-    Write-Host "DiligentCore patches applied successfully."
-}
-finally {
-    Pop-Location
-}
+Write-Host "DiligentCore patches applied."
