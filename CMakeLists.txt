@@ -41,6 +41,7 @@ set(DANTESINFERNO_SOURCES
     src/main.cpp
     src/damage_hooks.cpp
     src/frame_rate_hooks.cpp
+    src/memory_hooks.cpp
     src/timer_resolution.cpp
     src/user_paths.cpp
     src/overlay/achievement_sound.cpp

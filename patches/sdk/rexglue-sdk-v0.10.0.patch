@@ -5636,3 +5636,131 @@ index 2251429..513cfb4 100644
    SDL_SetWindowFullscreen(sdl_window_, IsFullscreen());
  }
  
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 5cfea05..77a3a25 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <forward_list>
+ 
+ #include <disruptorplus/multi_threaded_claim_strategy.hpp>
+@@ -21,6 +22,10 @@
+ #include <rex/thread.h>
+ #include <rex/thread/timer_queue.h>
+ 
++#if REX_PLATFORM_WIN32
++#include "platform_win.h"
++#endif
++
+ namespace dp = disruptorplus;
+ 
+ namespace rex::thread {
+@@ -39,6 +44,12 @@ class TimerQueue {
+         claim_strategy_(kWaitCount, wait_strategy_),
+         consumed_(wait_strategy_) {
+     claim_strategy_.add_claim_barrier(consumed_);
++#if REX_PLATFORM_WIN32
++    wake_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
++    wait_timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
++                                         TIMER_ALL_ACCESS);
++    if (!wait_timer_) wait_timer_ = CreateWaitableTimerW(nullptr, FALSE, nullptr);
++#endif
+     dispatch_thread_ =
+         std::jthread([this](std::stop_token stop_token) { TimerThreadMain(stop_token); });
+   }
+@@ -55,6 +66,25 @@ class TimerQueue {
+     // std::jthread auto-joins on destruction
+   }
+ 
++#if REX_PLATFORM_WIN32
++  void SleepUntil(clock::time_point due) {
++    auto now = clock::now();
++    if (due <= now) return;
++    if (due == clock::time_point::max() || !wait_timer_) {
++      WaitForSingleObject(wake_event_, due == clock::time_point::max() ? INFINITE : 1);
++      return;
++    }
++    LARGE_INTEGER relative;
++    relative.QuadPart =
++        -std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(due - now)
++                                      .count() /
++                                  100);
++    SetWaitableTimer(wait_timer_, &relative, 0, nullptr, nullptr, FALSE);
++    HANDLE handles[2] = {wake_event_, wait_timer_};
++    WaitForMultipleObjects(2, handles, FALSE, INFINITE);
++  }
++#endif
++
+   void TimerThreadMain(std::stop_token stop_token) {
+     dp::sequence_t next_sequence = 0;
+     const auto comp = [](const std::shared_ptr<WaitItem>& left,
+@@ -67,9 +97,20 @@ class TimerQueue {
+     while (!stop_token.stop_requested()) {
+       {
+         // Consume new wait items and add them to sorted wait queue
++#if REX_PLATFORM_WIN32
++        if (!queued_.load(std::memory_order_acquire)) {
++          SleepUntil(wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
++        }
++        dp::sequence_t available = next_sequence - 1;
++        if (queued_.exchange(false, std::memory_order_acq_rel)) {
++          available = claim_strategy_.wait_until_published(next_sequence, next_sequence - 1,
++                                                           clock::time_point::min());
++        }
++#else
+         dp::sequence_t available = claim_strategy_.wait_until_published(
+             next_sequence, next_sequence - 1,
+             wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
++#endif
+ 
+         // Check for timeout
+         if (available != next_sequence - 1) {
+@@ -132,6 +173,10 @@ class TimerQueue {
+     auto sequence = claim_strategy_.claim_one();
+     buffer_[sequence] = std::move(wait_item);
+     claim_strategy_.publish(sequence);
++#if REX_PLATFORM_WIN32
++    queued_.store(true, std::memory_order_release);
++    SetEvent(wake_event_);
++#endif
+ 
+     return wait_item_weak;
+   }
+@@ -149,6 +194,11 @@ class TimerQueue {
+   // This is a _sorted_ (ascending due_) list of active timers managed by a
+   // dedicated thread
+   std::forward_list<std::shared_ptr<WaitItem>> wait_queue_;
++#if REX_PLATFORM_WIN32
++  HANDLE wake_event_ = nullptr;
++  HANDLE wait_timer_ = nullptr;
++  std::atomic<bool> queued_{false};
++#endif
+   std::jthread dispatch_thread_;
+ };
+ 
+diff --git a/src/system/xthread.cpp b/src/system/xthread.cpp
+index 77bce25..5897874 100644
+--- a/src/system/xthread.cpp
++++ b/src/system/xthread.cpp
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cstring>
++#include <mutex>
+ 
+ #include <fmt/format.h>
+ 
+@@ -899,7 +900,8 @@ void XThread::SetActiveCpu(uint8_t cpu_index) {
+       thread_->set_affinity_mask(uint64_t(1) << cpu_index);
+     }
+   } else {
+-    REXSYS_WARN("Too few processor cores - scheduling will be wonky");
++    static std::once_flag warned;
++    std::call_once(warned, [] { REXSYS_WARN("Too few processor cores - scheduling will be wonky"); });
+   }
+ }
+ 

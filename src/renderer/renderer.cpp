@@ -999,8 +999,8 @@ void SubmitDraw(uint32_t dev, uint32_t initiator, uint32_t dma_base, uint32_t dm
   CaptureDrawState(dev, base, state);
   uint32_t index = 0;
   for (const auto& range : kShadowRanges) {
-    for (uint32_t i = 0; i < range.count; ++i)
-      g_register_file->values[range.reg + i] = state[index++];
+    std::memcpy(&g_register_file->values[range.reg], &state[index], range.count * 4);
+    index += range.count;
   }
   g_register_file->values[rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR] = initiator;
   g_register_file->values[rex::graphics::XE_GPU_REG_VGT_DMA_BASE] = dma_base;
@@ -1203,6 +1203,8 @@ void PerfOnSwap(uint32_t draws, uint32_t resolves) {
       stats.pipelines_created);
   std::string threads = BusiestThreads(seconds);
   if (!threads.empty()) REXLOG_INFO("PERF threads: {}", threads);
+  std::string hot = HotSpots();
+  if (!hot.empty()) REXLOG_INFO("PERF hot:{}", hot);
   p.start = now;
   p.frame_ms.clear();
   p.slow_frames = 0;

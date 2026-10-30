@@ -53,6 +53,42 @@ using Translator = rg::SpirvShaderTranslator;
 
 constexpr uint32_t kIndexRingSize = 32u * 1024 * 1024;
 
+void ConvertIndices16(const uint8_t* src, uint32_t count, bool swap, bool reset_enabled,
+                      uint16_t reset, uint16_t* out) {
+  std::memcpy(out, src, size_t(count) * 2);
+  if (swap) {
+    for (uint32_t i = 0; i < count; ++i) out[i] = uint16_t((out[i] << 8) | (out[i] >> 8));
+  }
+  if (reset_enabled) {
+    for (uint32_t i = 0; i < count; ++i) out[i] = out[i] == reset ? uint16_t(0xFFFF) : out[i];
+  }
+}
+
+void ConvertIndices32(const uint8_t* src, uint32_t count, xenos::Endian endian,
+                      bool reset_enabled, uint32_t reset, uint32_t* out) {
+  std::memcpy(out, src, size_t(count) * 4);
+  switch (endian) {
+    case xenos::Endian::k8in16:
+      for (uint32_t i = 0; i < count; ++i) {
+        out[i] = ((out[i] << 8) & 0xFF00FF00u) | ((out[i] >> 8) & 0x00FF00FFu);
+      }
+      break;
+    case xenos::Endian::k8in32:
+      for (uint32_t i = 0; i < count; ++i) out[i] = __builtin_bswap32(out[i]);
+      break;
+    case xenos::Endian::k16in32:
+      for (uint32_t i = 0; i < count; ++i) out[i] = (out[i] >> 16) | (out[i] << 16);
+      break;
+    default:
+      break;
+  }
+  if (reset_enabled) {
+    for (uint32_t i = 0; i < count; ++i) {
+      out[i] = (out[i] & 0xFFFFFF) == reset ? 0xFFFFFFFFu : out[i];
+    }
+  }
+}
+
 static_assert([] {
   uint32_t count = 0;
   for (uint32_t i = 0; i < kStoredContextRanges; ++i) {
@@ -594,35 +630,35 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
   // Indices: guest DMA indices (byte-swapped, reset index mapped to the host
   // restart value) or generated for fans / quad lists, written to the ring.
   bool index32 = indexed && initiator.index_size == xenos::IndexFormat::kInt32;
-  std::vector<uint32_t> source;
+  const uint8_t* index_src = nullptr;
+  xenos::Endian index_endian = xenos::Endian::kNone;
+  bool reset_enabled = false;
+  uint32_t reset = 0;
   if (indexed) {
     uint32_t dma_base = regs.values[rg::XE_GPU_REG_VGT_DMA_BASE];
-    auto dma_size = regs.Get<reg::VGT_DMA_SIZE>();
-    const uint8_t* src = guest::PhysicalPtr(base, dma_base & ~(index32 ? 3u : 1u));
+    index_src = guest::PhysicalPtr(base, dma_base & ~(index32 ? 3u : 1u));
+    index_endian = regs.Get<reg::VGT_DMA_SIZE>().swap_mode;
     // Primitive reset only applies to strips (as in the SDK primitive processor).
-    bool reset_enabled = regs.Get<reg::PA_SU_SC_MODE_CNTL>().multi_prim_ib_ena &&
-                         (topology == dl::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
-                          topology == dl::PRIMITIVE_TOPOLOGY_LINE_STRIP) &&
-                         !points;
-    uint32_t reset = regs.Get<reg::VGT_MULTI_PRIM_IB_RESET_INDX>().reset_indx;
-    source.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-      uint32_t v;
-      if (index32) {
-        uint32_t raw;
-        std::memcpy(&raw, src + i * 4, 4);
-        v = xenos::GpuSwap(raw, dma_size.swap_mode);
-        if (reset_enabled && (v & 0xFFFFFF) == reset) v = 0xFFFFFFFFu;
-      } else {
-        uint16_t raw;
-        std::memcpy(&raw, src + i * 2, 2);
-        v = xenos::GpuSwap(raw, dma_size.swap_mode);
-        if (reset_enabled && v == (reset & 0xFFFF)) v = 0xFFFF;
-      }
-      source.push_back(v);
-    }
+    reset_enabled = regs.Get<reg::PA_SU_SC_MODE_CNTL>().multi_prim_ib_ena &&
+                    (topology == dl::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+                     topology == dl::PRIMITIVE_TOPOLOGY_LINE_STRIP) &&
+                    !points;
+    reset = regs.Get<reg::VGT_MULTI_PRIM_IB_RESET_INDX>().reset_indx;
   }
+  auto guest_index = [&](uint32_t i) -> uint32_t {
+    if (index32) {
+      uint32_t raw;
+      std::memcpy(&raw, index_src + i * 4, 4);
+      uint32_t v = xenos::GpuSwap(raw, index_endian);
+      return reset_enabled && (v & 0xFFFFFF) == reset ? 0xFFFFFFFFu : v;
+    }
+    uint16_t raw;
+    std::memcpy(&raw, index_src + i * 2, 2);
+    uint32_t v = index_endian == xenos::Endian::k8in16 ? uint16_t((raw << 8) | (raw >> 8)) : raw;
+    return reset_enabled && v == (reset & 0xFFFF) ? 0xFFFFu : v;
+  };
   std::vector<uint32_t> indices;
+  uint32_t index_count = 0;
   uint32_t point_index_load_address = 0;
   xenos::Endian point_index_endian = xenos::Endian::kNone;
   if (points) {
@@ -635,7 +671,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
       uint32_t dma_base = regs.values[rg::XE_GPU_REG_VGT_DMA_BASE];
       uint32_t index_bytes = index32 ? 4 : 2;
       point_index_load_address = dma_base & ~(index_bytes - 1);
-      point_index_endian = regs.Get<reg::VGT_DMA_SIZE>().swap_mode;
+      point_index_endian = index_endian;
       if (!index32 && point_index_endian != xenos::Endian::kNone &&
           point_index_endian != xenos::Endian::k8in16) {
         point_index_endian = point_index_endian == xenos::Endian::k8in32 ? xenos::Endian::k8in16
@@ -645,7 +681,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
     }
     index32 = true;
   } else if (fan || quads) {
-    auto vertex = [&](uint32_t i) { return indexed ? source[i] : i; };
+    auto vertex = [&](uint32_t i) { return indexed ? guest_index(i) : i; };
     if (fan) {
       for (uint32_t i = 2; i < count; ++i) {
         indices.insert(indices.end(), {vertex(0), vertex(i - 1), vertex(i)});
@@ -657,24 +693,25 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
       }
     }
     index32 = true;
-  } else if (indexed) {
-    indices = std::move(source);
   }
   uint32_t index_offset = 0;
   dl::VALUE_TYPE index_type = index32 ? dl::VT_UINT32 : dl::VT_UINT16;
-  if (!indices.empty()) {
+  if (!indices.empty() || indexed) {
     uint32_t stride = index32 ? 4 : 2;
-    uint32_t bytes = uint32_t(indices.size()) * stride;
-    m.index_scratch.resize(bytes);
-    for (size_t i = 0; i < indices.size(); ++i) {
-      if (index32) {
-        std::memcpy(&m.index_scratch[i * 4], &indices[i], 4);
-      } else {
-        uint16_t v = uint16_t(indices[i]);
-        std::memcpy(&m.index_scratch[i * 2], &v, 2);
-      }
-    }
+    index_count = indices.empty() ? count : uint32_t(indices.size());
+    uint32_t bytes = index_count * stride;
     if (bytes > kIndexRingSize) return false;
+    m.index_scratch.resize(bytes);
+    if (!indices.empty()) {
+      std::memcpy(m.index_scratch.data(), indices.data(), bytes);
+    } else if (index32) {
+      ConvertIndices32(index_src, count, index_endian, reset_enabled, reset,
+                       reinterpret_cast<uint32_t*>(m.index_scratch.data()));
+    } else {
+      ConvertIndices16(index_src, count, index_endian == xenos::Endian::k8in16, reset_enabled,
+                       uint16_t(reset),
+                       reinterpret_cast<uint16_t*>(m.index_scratch.data()));
+    }
     if (m.index_ring_offset + bytes > kIndexRingSize) m.index_ring_offset = 0;
     index_offset = m.index_ring_offset;
     m.context->UpdateBuffer(m.index_ring, index_offset, bytes, m.index_scratch.data(),
@@ -1012,11 +1049,11 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
   m.context->SetBlendFactors(blend_constant);
   m.context->CommitShaderResources(pipeline->srb, dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-  if (!indices.empty()) {
+  if (index_count) {
     m.context->SetIndexBuffer(m.index_ring, index_offset,
                               dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     dl::DrawIndexedAttribs attribs;
-    attribs.NumIndices = uint32_t(indices.size());
+    attribs.NumIndices = index_count;
     attribs.IndexType = index_type;
     m.context->DrawIndexed(attribs);
   } else {
@@ -1030,7 +1067,7 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
         "NATIVE-DRAW prim={} count={} {} idx={} vp=({},{} {}x{} z {:.3f}..{:.3f}) "
         "ndc=({:.4f},{:.4f},{:.4f})+({:.4f},{:.4f},{:.4f}) scissor=({},{})-({},{}) rt={}x{} "
         "colors={} depth={} zfunc={} ztest={} mask={:04X} blend={:08X} vs={:016X} ps={:016X}{}{}",
-        uint32_t(initiator.prim_type), count, indexed ? "dma" : "auto", indices.size(),
+        uint32_t(initiator.prim_type), count, indexed ? "dma" : "auto", index_count,
         viewport.xy_offset[0], viewport.xy_offset[1], viewport.xy_extent[0], viewport.xy_extent[1],
         viewport.z_min, viewport.z_max, viewport.ndc_scale[0], viewport.ndc_scale[1],
         viewport.ndc_scale[2], viewport.ndc_offset[0], viewport.ndc_offset[1],
