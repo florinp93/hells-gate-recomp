@@ -123,46 +123,44 @@ class DantesInfernoApp : public rex::ReXApp {
     REXCVAR_SET(input_backend, std::string("sdl"));
 
     // Keyboard / mouse layout, unless the user or the launcher set one.
-    auto keybind_default = [](const char* name, const char* value) {
+    static constexpr std::pair<const char*, const char*> kKeybindDefaults[] = {
+        {"mnk_mode", "true"},
+        {"mnk_mouse", "true"},
+        {"mnk_sensitivity", "1.5"},
+        {"keybind_a", "Space"},
+        {"keybind_b", "F"},
+        {"keybind_x", "LMB"},
+        {"keybind_y", "E"},
+        {"keybind_left_shoulder", "Q"},
+        {"keybind_right_shoulder", "RMB"},
+        {"keybind_left_trigger", "Shift"},
+        {"keybind_right_trigger", "Control"},
+        {"keybind_lstick_up", "W"},
+        {"keybind_lstick_down", "S"},
+        {"keybind_lstick_left", "A"},
+        {"keybind_lstick_right", "D"},
+        {"keybind_lstick_press", "X"},
+        {"keybind_rstick_up", "Up"},
+        {"keybind_rstick_down", "Down"},
+        {"keybind_rstick_left", "Left"},
+        {"keybind_rstick_right", "Right"},
+        {"keybind_rstick_press", "R"},
+        {"keybind_dpad_up", "Shift+Up"},
+        {"keybind_dpad_down", "Shift+Down"},
+        {"keybind_dpad_left", "Shift+Left"},
+        {"keybind_dpad_right", "Shift+Right"},
+        {"keybind_back", "Tab"},
+        {"keybind_start", "Escape"},
+    };
+    for (const auto& [name, value] : kKeybindDefaults) {
       if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault) {
         rex::cvar::SetFlagByName(name, value);
       }
-    };
-    keybind_default("mnk_mode", "true");
-    keybind_default("mnk_mouse", "true");
-    keybind_default("mnk_sensitivity", "1.5");
-    keybind_default("keybind_a", "Space");
-    keybind_default("keybind_b", "F");
-    keybind_default("keybind_x", "LMB");
-    keybind_default("keybind_y", "E");
-    keybind_default("keybind_left_shoulder", "Q");
-    keybind_default("keybind_right_shoulder", "RMB");
-    keybind_default("keybind_left_trigger", "Shift");
-    keybind_default("keybind_right_trigger", "Control");
-    keybind_default("keybind_lstick_up", "W");
-    keybind_default("keybind_lstick_down", "S");
-    keybind_default("keybind_lstick_left", "A");
-    keybind_default("keybind_lstick_right", "D");
-    keybind_default("keybind_lstick_press", "X");
-    keybind_default("keybind_rstick_up", "Up");
-    keybind_default("keybind_rstick_down", "Down");
-    keybind_default("keybind_rstick_left", "Left");
-    keybind_default("keybind_rstick_right", "Right");
-    keybind_default("keybind_rstick_press", "R");
-    keybind_default("keybind_dpad_up", "Shift+Up");
-    keybind_default("keybind_dpad_down", "Shift+Down");
-    keybind_default("keybind_dpad_left", "Shift+Left");
-    keybind_default("keybind_dpad_right", "Shift+Right");
-    keybind_default("keybind_back", "Tab");
-    keybind_default("keybind_start", "Escape");
+    }
 
     double target_aspect = REXCVAR_GET(ultrawide_target_aspect);
-    if (target_aspect > 0.0) {
-      g_ultrawide_target_aspect = static_cast<float>(target_aspect);
-      REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
-    } else {
-      REXLOG_INFO("ULTRAWIDE: disabled (target_aspect={:.4f})", target_aspect);
-    }
+    if (target_aspect > 0.0) g_ultrawide_target_aspect = static_cast<float>(target_aspect);
+    REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
   }
 
   // The game starts once the renderer has built the recorded shaders and
@@ -398,14 +396,11 @@ class DantesInfernoApp : public rex::ReXApp {
     });
 
     rex::ui::RegisterBind("bind_fast_forward", "F2", "Toggle 50x fast-forward", [this] {
-      double current = REXCVAR_GET(time_scalar);
-      bool fast = current > 1.0;
+      bool fast = REXCVAR_GET(time_scalar) > 1.0;
       double target = fast ? 1.0 : 50.0;
       rex::cvar::SetFlagByName("time_scalar", std::to_string(target));
       rex::chrono::Clock::set_guest_time_scalar(target);
-      if (!fast) {
-        saved_vsync_ = rex::cvar::Query<bool>("vsync");
-      }
+      if (!fast) saved_vsync_ = rex::cvar::Query<bool>("vsync");
       rex::cvar::SetFlagByName("vsync", fast ? (saved_vsync_ ? "true" : "false") : "false");
     });
 
@@ -534,22 +529,7 @@ class DantesInfernoApp : public rex::ReXApp {
     renderer::SetOverlayFrameRequest(nullptr);
     renderer::Stop();
     overlay::ShutdownAchievementSound();
-    rex::ui::UnregisterBind("bind_fast_forward");
-    rex::ui::UnregisterBind("bind_pass_trace");
-    rex::ui::UnregisterBind("bind_d3d_trace");
-    rex::ui::UnregisterBind("bind_verify_gpu_state");
-#ifdef DANTESINFERNO_DEV_CHEATS
-    rex::ui::UnregisterBind("bind_cheat_god");
-    rex::ui::UnregisterBind("bind_cheat_one_hit");
-#endif
-    rex::ui::UnregisterBind("bind_host_rendering");
-    rex::ui::UnregisterBind("bind_dante_debug_view");
-    rex::ui::UnregisterBind("bind_dante_record");
-    rex::ui::UnregisterBind("bind_dante_replay");
-    rex::ui::UnregisterBind("bind_dante_smaa");
-    rex::ui::UnregisterBind("bind_rdoc_capture");
-    rex::ui::UnregisterBind("bind_fps_overlay");
-    rex::ui::UnregisterBind("bind_exit_game");
+    for (const char* bind : kBinds) rex::ui::UnregisterBind(bind);
     rex::cvar::UnregisterChangeCallbacks("time_scalar");
     rex::cvar::UnregisterChangeCallbacks("ultrawide_target_aspect");
     fps_overlay_.reset();
@@ -559,6 +539,13 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
  private:
+  static constexpr const char* kBinds[] = {
+      "bind_exit_game",      "bind_fps_overlay",      "bind_pass_trace",   "bind_d3d_trace",
+      "bind_host_rendering", "bind_dante_debug_view", "bind_rdoc_capture", "bind_dante_smaa",
+      "bind_dante_replay",   "bind_dante_record",     "bind_cheat_god",    "bind_cheat_one_hit",
+      "bind_verify_gpu_state", "bind_fast_forward",
+  };
+
   // Achievement icons are textures of the drawer that draws ImGui.
   rex::ui::ImmediateDrawer* IconDrawer() const {
     return overlay_drawer_ ? overlay_drawer_.get() : immediate_drawer();
