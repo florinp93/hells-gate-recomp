@@ -254,7 +254,7 @@
                                                Foreground="{StaticResource GoldBrush}" Margin="0,0,0,6" />
                                     <TextBlock x:Name="TrialsServerMessageText" Text="" TextWrapping="Wrap" FontSize="13"
                                                Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,12" />
-                                    <Button x:Name="TrialsServerButton" Content="Support on Ko-Fi" HorizontalAlignment="Left" Click="TrialsServerButton_Click" />
+                                    <Button x:Name="TrialsServerButton" Content="Support on Ko-Fi" HorizontalAlignment="Left" Click="SupportButton_Click" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>

@@ -42,10 +42,7 @@ namespace DantesInferno.Launcher
             RefreshDlcStatus();
             CheckForUpdatesOnStartup();
             RefreshSettingsSummary();
-            Closing += (s, e) =>
-            {
-                AutoSave();
-            };
+            Closing += (s, e) => AutoSave();
             ContentRendered += (s, e) =>
             {
                 string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
@@ -132,10 +129,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateControls()
         {
-            var version = GitHubUpdater.GetLocalVersion(_installDir);
-            VersionText.Text = "Version: " + version.ToString();
-            UpdateVersionText.Text = "Installed version: " + version.ToString();
-
             if (_displayAspect == null)
                 _displayAspect = DisplayOptions.DetectPrimaryAspect();
 
@@ -146,8 +139,7 @@ namespace DantesInferno.Launcher
 
             _resolutionOptions = DisplayOptions.BuildResolutionOptions(_displayAspect);
             ResolutionCombo.ItemsSource = _resolutionOptions;
-            int width, height;
-            ResolutionCombo.Text = DisplayOptions.TryParseResolution(_config.RenderResolution, out width, out height)
+            ResolutionCombo.Text = DisplayOptions.TryParseResolution(_config.RenderResolution, out int width, out int height)
                 ? DisplayOptions.FormatResolution(width, height)
                 : DisplayOptions.NativeResolution(_displayAspect);
 
@@ -187,7 +179,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateShadowCombo(int selected)
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
             var items = new List<KeyValuePair<int, string>>
             {
                 new KeyValuePair<int, string>(1, Lt(LauncherLocalizer.ShadowOriginal)),
@@ -202,7 +193,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateGlyphCombo(string selected)
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
             var items = new List<KeyValuePair<string, string>>
             {
                 new KeyValuePair<string, string>("auto", Lt(LauncherLocalizer.GlyphAuto)),
@@ -253,9 +243,6 @@ namespace DantesInferno.Launcher
 
         private void ApplyLocalization()
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
-            string Lf(string key, params object[] args) => LauncherLocalizer.Get(_launcherLanguage, key, args);
-
             TabPlay.Header = Lt(LauncherLocalizer.TabPlay);
             TabDlc.Header = Lt(LauncherLocalizer.TabDlc);
             TabControls.Header = Lt(LauncherLocalizer.TabControls);
@@ -494,30 +481,7 @@ namespace DantesInferno.Launcher
 
         private void ResetKeybinds_Click(object sender, RoutedEventArgs e)
         {
-            _config.KeybindA = "Space";
-            _config.KeybindB = "F";
-            _config.KeybindX = "LMB";
-            _config.KeybindY = "E";
-            _config.KeybindLeftShoulder = "Q";
-            _config.KeybindRightShoulder = "RMB";
-            _config.KeybindLeftTrigger = "Shift";
-            _config.KeybindRightTrigger = "Ctrl";
-            _config.KeybindLStickUp = "W";
-            _config.KeybindLStickDown = "S";
-            _config.KeybindLStickLeft = "A";
-            _config.KeybindLStickRight = "D";
-            _config.KeybindLStickPress = "X";
-            _config.KeybindRStickUp = "Up";
-            _config.KeybindRStickDown = "Down";
-            _config.KeybindRStickLeft = "Left";
-            _config.KeybindRStickRight = "Right";
-            _config.KeybindRStickPress = "R";
-            _config.KeybindDpadUp = "Shift+Up";
-            _config.KeybindDpadDown = "Shift+Down";
-            _config.KeybindDpadLeft = "Shift+Left";
-            _config.KeybindDpadRight = "Shift+Right";
-            _config.KeybindBack = "Tab";
-            _config.KeybindStart = "Escape";
+            _config.ResetKeybinds();
             PopulateKeybinds();
             MessageBox.Show("Default bindings restored.", "Reset",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -537,7 +501,7 @@ namespace DantesInferno.Launcher
             string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
             if (File.Exists(exePath) && File.Exists(Path.Combine(gameData, "default.xex")))
             {
-                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusReady);
+                PlayStatusText.Text = Lt(LauncherLocalizer.PlayStatusReady);
                 string release = IsoChecker.InstalledRelease(gameData);
                 if (release != null)
                     PlayStatusText.Text = PlayStatusText.Text.TrimEnd('.') + ": " + release;
@@ -545,7 +509,7 @@ namespace DantesInferno.Launcher
             }
             else
             {
-                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusMissing);
+                PlayStatusText.Text = Lt(LauncherLocalizer.PlayStatusMissing);
                 StatusGameDot.Fill = (Brush)FindResource("DangerBrush");
             }
         }
@@ -575,8 +539,7 @@ namespace DantesInferno.Launcher
         // False (with a message) when the typed resolution is not WIDTHxHEIGHT.
         private bool SaveSettingsToConfig()
         {
-            int width, height;
-            if (!DisplayOptions.TryParseResolution(ResolutionCombo.Text, out width, out height))
+            if (!DisplayOptions.TryParseResolution(ResolutionCombo.Text, out int width, out int height))
             {
                 MessageBox.Show(string.Format(CultureInfo.InvariantCulture,
                         "'{0}' is not a resolution. Use WIDTHxHEIGHT, for example 2560x1440 ({1} to {2} pixels per side).",
@@ -971,17 +934,12 @@ namespace DantesInferno.Launcher
         {
             string logsDir = PathHelper.GetLogsPath(_installDir);
             string latestLog = null;
-
             try
             {
                 if (Directory.Exists(logsDir))
-                {
-                    var logFile = Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories)
-                        .OrderByDescending(f => File.GetLastWriteTime(f))
+                    latestLog = Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories)
+                        .OrderByDescending(File.GetLastWriteTime)
                         .FirstOrDefault();
-                    if (logFile != null)
-                        latestLog = logFile;
-                }
             }
             catch { }
 
@@ -994,8 +952,7 @@ namespace DantesInferno.Launcher
             message += IssuesUrl + "\n\n";
             message += "Click OK to open the log folder and the GitHub issues page.";
 
-            var result = MessageBox.Show(message, "Game Crashed", MessageBoxButton.OKCancel, MessageBoxImage.Error);
-            if (result == MessageBoxResult.OK)
+            if (MessageBox.Show(message, "Game Crashed", MessageBoxButton.OKCancel, MessageBoxImage.Error) == MessageBoxResult.OK)
                 OpenProblemReport();
         }
 
@@ -1065,7 +1022,7 @@ namespace DantesInferno.Launcher
                     if (process.ExitCode != 0 || !File.Exists(zip))
                         throw new IOException("tar exited with code " + process.ExitCode);
                 }
-                Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + zip + "\"") { UseShellExecute = true });
+                OpenInExplorer("/select,\"" + zip + "\"");
             }
             catch (Exception ex)
             {
@@ -1125,17 +1082,17 @@ namespace DantesInferno.Launcher
             try
             {
                 if (zipped)
-                    Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + zip + "\"") { UseShellExecute = true });
+                    OpenInExplorer("/select,\"" + zip + "\"");
                 else if (Directory.Exists(logsDir))
-                    Process.Start(new ProcessStartInfo("explorer.exe", "\"" + logsDir + "\"") { UseShellExecute = true });
+                    OpenInExplorer("\"" + logsDir + "\"");
                 else
-                    Process.Start(new ProcessStartInfo("explorer.exe", "\"" + _installDir + "\"") { UseShellExecute = true });
+                    OpenInExplorer("\"" + _installDir + "\"");
             }
             catch { }
 
             try
             {
-                Process.Start(new ProcessStartInfo(IssuesUrl + "/new") { UseShellExecute = true });
+                OpenUrl(IssuesUrl + "/new");
             }
             catch { }
 
@@ -1165,8 +1122,7 @@ namespace DantesInferno.Launcher
         {
             if (MainTabControl == null)
                 return;
-            int index;
-            if (!int.TryParse((sender as FrameworkElement)?.Tag as string, out index))
+            if (!int.TryParse((sender as FrameworkElement)?.Tag as string, out int index))
                 return;
             if (MainTabControl.SelectedItem == TabSettings || MainTabControl.SelectedItem == TabControls)
                 AutoSave();
@@ -1194,12 +1150,9 @@ namespace DantesInferno.Launcher
             if (DisplayOptions.IsRendererFallback(_config))
                 parts.Add("D3D12 fallback");
             else
-            {
-                int width, height;
-                parts.Add(DisplayOptions.TryParseResolution(_config.RenderResolution, out width, out height)
+                parts.Add(DisplayOptions.TryParseResolution(_config.RenderResolution, out int width, out int height)
                     ? DisplayOptions.FormatResolution(width, height)
                     : DisplayOptions.NativeResolution(_displayAspect));
-            }
             parts.Add(DisplayOptions.FrameRateFor(_config, _displayAspect) + " FPS");
             if (_config.Smaa)
                 parts.Add("SMAA");
@@ -1290,7 +1243,7 @@ namespace DantesInferno.Launcher
             {
                 if (!Directory.Exists(dlcPath))
                     Directory.CreateDirectory(dlcPath);
-                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dlcPath + "\"") { UseShellExecute = true });
+                OpenInExplorer("\"" + dlcPath + "\"");
                 RefreshDlcStatus();
             }
             catch (Exception ex)
@@ -1306,7 +1259,7 @@ namespace DantesInferno.Launcher
             {
                 if (!Directory.Exists(gameDir))
                     Directory.CreateDirectory(gameDir);
-                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + gameDir + "\"") { UseShellExecute = true });
+                OpenInExplorer("\"" + gameDir + "\"");
                 RefreshDlcStatus();
             }
             catch (Exception ex)
@@ -1320,8 +1273,6 @@ namespace DantesInferno.Launcher
             string dlcPath = PathHelper.GetDlcPath(_installDir);
             string tuPath = PathHelper.GetTitleUpdatePath(_config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir));
 
-            var parts = new List<string>();
-
             var dlcNames = new List<string>();
             try
             {
@@ -1332,23 +1283,16 @@ namespace DantesInferno.Launcher
                     .ToList();
             }
             catch { }
-            parts.Add(dlcNames.Count > 0
-                ? LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderFound, dlcNames.Count) +
-                  "\n  " + string.Join("\n  ", dlcNames)
-                : LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderEmpty));
-
+            string dlcText = dlcNames.Count > 0
+                ? Lf(LauncherLocalizer.DlcFolderFound, dlcNames.Count)
+                : Lt(LauncherLocalizer.DlcFolderEmpty);
             bool tuReady = File.Exists(tuPath) || File.Exists(PathHelper.GetBundledTitleUpdatePath(_installDir));
-            string tuText = tuReady
-                ? LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.TuInstalled)
-                : LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.TuNotFound);
-            parts.Add(tuText);
+            string tuText = Lt(tuReady ? LauncherLocalizer.TuInstalled : LauncherLocalizer.TuNotFound);
 
-            DlcStatusText.Text = string.Join("\n", parts);
+            DlcStatusText.Text = dlcText + string.Concat(dlcNames.Select(n => "\n  " + n)) + "\n" + tuText;
             StatusTuText.Text = tuText;
             StatusTuDot.Fill = (Brush)FindResource(tuReady ? "SuccessBrush" : "DangerBrush");
-            StatusDlcText.Text = dlcNames.Count > 0
-                ? LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderFound, dlcNames.Count)
-                : LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderEmpty);
+            StatusDlcText.Text = dlcText;
             StatusDlcDot.Fill = (Brush)FindResource(dlcNames.Count > 0 ? "SuccessBrush" : "TextMutedBrush");
         }
 
@@ -1396,22 +1340,14 @@ namespace DantesInferno.Launcher
                 var localVersion = GitHubUpdater.GetLocalVersion(_installDir);
                 if (release.Version > localVersion)
                 {
-                    if (FindInstallerAsset(release) != null)
-                    {
-                        _pendingUpdate = release;
-                        DownloadUpdateButton.Visibility = Visibility.Visible;
-                        UpdateStatusText.Text =
-                            $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n" +
-                            $"{release.Body}\n\nClick \"Download & Install\" to get the new installer.";
-                    }
-                    else
-                    {
-                        UpdateStatusText.Text =
-                            $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n" +
-                            $"{release.Body}\n\nNo installer asset found in this release. " +
-                            "Visit the releases page to download manually:\n" +
-                            release.HtmlUrl;
-                    }
+                    bool hasInstaller = FindInstallerAsset(release) != null;
+                    _pendingUpdate = hasInstaller ? release : null;
+                    DownloadUpdateButton.Visibility = hasInstaller ? Visibility.Visible : Visibility.Collapsed;
+                    UpdateStatusText.Text =
+                        $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n{release.Body}\n\n" +
+                        (hasInstaller
+                            ? "Click \"Download & Install\" to get the new installer."
+                            : "No installer asset found in this release. Visit the releases page to download manually:\n" + release.HtmlUrl);
                 }
                 else
                 {
@@ -1443,7 +1379,7 @@ namespace DantesInferno.Launcher
                     "This copy was unpacked from the portable zip: download the new portable zip from the release page " +
                     "and extract it over this folder (your saves and settings are kept).",
                     "Update Available", MessageBoxButton.OK, MessageBoxImage.Information);
-                Process.Start(new ProcessStartInfo(_pendingUpdate.HtmlUrl) { UseShellExecute = true });
+                OpenUrl(_pendingUpdate.HtmlUrl);
                 return;
             }
 
@@ -1529,11 +1465,7 @@ namespace DantesInferno.Launcher
 
                     try
                     {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = downloadedPath,
-                            UseShellExecute = true,
-                        });
+                        OpenUrl(downloadedPath);
                         Application.Current.Shutdown();
                     }
                     catch (Exception ex)
@@ -1548,12 +1480,17 @@ namespace DantesInferno.Launcher
 
         private void SupportButton_Click(object sender, RoutedEventArgs e)
         {
-            Process.Start(new ProcessStartInfo("https://ko-fi.com/zerkiller") { UseShellExecute = true });
+            OpenUrl("https://ko-fi.com/zerkiller");
         }
 
-        private void TrialsServerButton_Click(object sender, RoutedEventArgs e)
+        private static void OpenUrl(string url)
         {
-            Process.Start(new ProcessStartInfo("https://ko-fi.com/zerkiller") { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+
+        private static void OpenInExplorer(string arguments)
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", arguments) { UseShellExecute = true });
         }
     }
 }

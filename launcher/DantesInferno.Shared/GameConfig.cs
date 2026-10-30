@@ -240,6 +240,12 @@ namespace DantesInferno
         public string KeybindBack { get { return this["keybind_back"] ?? "Tab"; } set { this["keybind_back"] = value; } }
         public string KeybindStart { get { return this["keybind_start"] ?? "Escape"; } set { this["keybind_start"] = value; } }
 
+        public void ResetKeybinds()
+        {
+            foreach (string key in _values.Keys.Where(k => k.StartsWith("keybind_", StringComparison.OrdinalIgnoreCase)).ToList())
+                _values.Remove(key);
+        }
+
         public bool Remove(string key)
         {
             if (string.IsNullOrEmpty(key))
