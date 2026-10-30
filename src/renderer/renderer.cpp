@@ -4,6 +4,7 @@
 #include "button_glyphs.h"
 #include "draw_renderer.h"
 #include "guest_gpu_state.h"
+#include "mod_loader.h"
 #include "png_dump.h"
 #include "render_stats.h"
 #include "pipeline_storage.h"
@@ -348,6 +349,7 @@ std::unique_ptr<OverlayRenderer> g_overlay;
 std::mutex g_present_mutex;
 PresentCount g_present_count;
 std::unique_ptr<ButtonGlyphs> g_button_glyphs;
+std::unique_ptr<ModLoader> g_mod_loader;
 std::function<GlyphStyle()> g_glyph_style_source;
 std::function<KeyBindings()> g_glyph_bindings_source;
 std::unique_ptr<rex::graphics::RegisterFile> g_register_file;
@@ -1413,8 +1415,13 @@ bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir) {
   g_device->SetBeforePresent(
       [](dl::ITextureView* back_buffer) { g_overlay->Draw(g_device->Context(), back_buffer); });
   g_button_glyphs = std::make_unique<ButtonGlyphs>(g_device->RenderDevice());
+  g_mod_loader = std::make_unique<ModLoader>(g_device->RenderDevice(),
+                                             rex::filesystem::GetExecutableFolder() / "mods");
+  if (!g_mod_loader->Active()) g_mod_loader.reset();
   g_texture_cache->SetReplacer([](uint64_t hash, const TextureCache::LoadedTexture* loaded) {
-    return g_button_glyphs ? g_button_glyphs->Replace(hash, loaded) : nullptr;
+    dl::ITexture* glyph = g_button_glyphs ? g_button_glyphs->Replace(hash, loaded) : nullptr;
+    if (glyph) return glyph;
+    return g_mod_loader ? g_mod_loader->Replace(hash, loaded) : nullptr;
   });
   if (!cache_dir.empty()) {
     std::error_code ec;
@@ -1498,6 +1505,7 @@ void Stop() {
   g_overlay.reset();
   g_draw_renderer.reset();
   g_button_glyphs.reset();
+  g_mod_loader.reset();
   g_texture_cache.reset();
   g_shader_cache.reset();
   g_pipeline_storage.reset();

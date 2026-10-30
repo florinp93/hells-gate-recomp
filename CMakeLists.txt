@@ -117,6 +117,7 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         src/renderer/shader_cache.cpp
         src/renderer/smaa_pass.cpp
         src/renderer/texture_cache.cpp
+        src/renderer/mod_loader.cpp
         src/renderer/thread_cpu.cpp
         src/renderer/renderer_config.cpp
         src/renderer/ui_overlay.cpp
