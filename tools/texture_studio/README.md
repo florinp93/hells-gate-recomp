@@ -2,7 +2,8 @@
 
 Extracts the game's textures to PNG for upscaling or editing and turns the
 edited files into a texture mod the game loads instead of the originals.
-Mods need the native renderer (`--renderer=dante`, the default).
+Mods need the native renderer (`--renderer=dante`, the default). The
+step-by-step guide for modders is `docs/texture_modding.md`.
 
 ## Workflow
 
@@ -38,8 +39,8 @@ the memory.
 
 ## Notes
 
-- Normal maps (`DXT5_NM`) and specular maps are exported as stored; keep
-  their channel layout when editing.
+- Normal maps (`DXT5_NM`, stored as X in alpha and Y in green) are exported
+  as standard RGB normal maps and converted back, renormalised, on build.
 - Some textures appear under several names because the game stores identical
   copies; they share one hash and one PNG.
 - Cube maps and volume textures are not listed.
