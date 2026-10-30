@@ -3,9 +3,6 @@ using System.Collections.Generic;
 
 namespace DantesInferno
 {
-    /// <summary>
-    /// Launcher and installer UI text.
-    /// </summary>
     public static class LauncherLocalizer
     {
         public const string DefaultLanguage = "en";
@@ -128,51 +125,7 @@ namespace DantesInferno
             LanguageLauncherTooltip = "language_launcher_tooltip",
             TuFolderTooltip = "tu_folder_tooltip",
             ControllerTooltip = "controller_tooltip",
-            GlyphTooltip = "glyph_tooltip",
-            // Installer
-            InstTitle = "inst_title",
-            InstHeader = "inst_header",
-            InstWelcomeTitle = "inst_welcome_title",
-            InstWelcomeIntro = "inst_welcome_intro",
-            InstWelcomeStep1 = "inst_welcome_step1",
-            InstWelcomeStep2 = "inst_welcome_step2",
-            InstWelcomeStep3 = "inst_welcome_step3",
-            InstWelcomeStep4 = "inst_welcome_step4",
-            InstWelcomeStep5 = "inst_welcome_step5",
-            InstWelcomeLegal = "inst_welcome_legal",
-            InstDestTitle = "inst_dest_title",
-            InstDestHint = "inst_dest_hint",
-            InstBrowse = "inst_browse",
-            InstIsoTitle = "inst_iso_title",
-            InstIsoHint = "inst_iso_hint",
-            InstProgressTitle = "inst_progress_title",
-            InstFinishTitle = "inst_finish_title",
-            InstCreateShortcut = "inst_create_shortcut",
-            InstBack = "inst_back",
-            InstNext = "inst_next",
-            InstInstall = "inst_install",
-            InstFinish = "inst_finish",
-            InstInvalidDestTitle = "inst_invalid_dest_title",
-            InstInvalidDestMsg = "inst_invalid_dest_msg",
-            InstInvalidIsoTitle = "inst_invalid_iso_title",
-            InstInvalidIsoMsg = "inst_invalid_iso_msg",
-            InstFolderDialog = "inst_folder_dialog",
-            InstIsoDialog = "inst_iso_dialog",
-            InstFailedTitle = "inst_failed_title",
-            InstFailedMsg = "inst_failed_msg",
-            InstShortcutErrorTitle = "inst_shortcut_error_title",
-            InstShortcutErrorMsg = "inst_shortcut_error_msg",
-            InstFinishSummary = "inst_finish_summary",
-            InstPreparing = "inst_preparing",
-            InstRemovingOld = "inst_removing_old",
-            InstExtracting = "inst_extracting",
-            InstSkipExtract = "inst_skip_extract",
-            InstCopying = "inst_copying",
-            InstCopied = "inst_copied",
-            InstUpdatingConfig = "inst_updating_config",
-            InstCopyTu = "inst_copy_tu",
-            InstTuMissing = "inst_tu_missing",
-            InstComplete = "inst_complete";
+            GlyphTooltip = "glyph_tooltip";
 
         private static readonly Dictionary<string, Dictionary<string, string>> _translations;
 
@@ -180,7 +133,6 @@ namespace DantesInferno
         {
             _translations = new Dictionary<string, Dictionary<string, string>>();
 
-            // English
             var en = new Dictionary<string, string>
             {
                 { TabPlay, "PLAY" },
@@ -200,7 +152,6 @@ namespace DantesInferno
                 { VersionLabel, "Version: {0}" },
                 { DlcTitle, "Downloadable Content" },
                 { DlcDescription, "Click Install DLC (or drop files on this page) and pick your DLC files, folders or archives (.zip, .7z, .rar). The launcher checks each package, keeps the Dante's Inferno DLC and the game installs it on the next start." },
-                { InstallDlc, "Install DLC..." },
                 { OpenDlcFolder, "Open DLC Folder" },
                 { OpenTuFolder, "Open TU Folder" },
                 { DlcFolderEmpty, "DLC folder: empty" },
@@ -265,7 +216,6 @@ namespace DantesInferno
                 { ResetToRecommended, "Reset to Recommended" },
                 { SaveSettings, "Save Settings" },
                 { UpdatesTitle, "Check for Updates" },
-                { InstalledVersion, "Installed version: {0}" },
                 { CheckForUpdates, "Check for Updates" },
                 { DownloadInstall, "Download & Install" },
                 { ResolutionTooltip, "Render resolution. Defaults to your display. Any resolution works: pick one or type WIDTHxHEIGHT." },
@@ -276,52 +226,6 @@ namespace DantesInferno
                 { TuFolderTooltip, "Opens the game folder where default.xexp (Title Update) must be placed." },
                 { ControllerTooltip, "Checked = SDL3 (all controller families). Unchecked = XInput (Xbox pads only)." },
                 { GlyphTooltip, "Which button icons the game shows. Automatic follows the controller or keyboard you are using; keyboard icons show your key bindings." },
-                { InstTitle, "Dante's Inferno - Installer" },
-                { InstHeader, "DANTE'S INFERNO - INSTALLER" },
-                { InstWelcomeTitle, "Welcome to the Nine Circles." },
-                { InstWelcomeIntro, "This installer will:" },
-                { InstWelcomeStep1, "- Ask for the destination folder" },
-                { InstWelcomeStep2, "- Ask for your original game ISO" },
-                { InstWelcomeStep3, "- Extract the ISO into the destination" },
-                { InstWelcomeStep4, "- Copy the PC port files into the destination" },
-                { InstWelcomeStep5, "- Create a desktop shortcut" },
-                { InstWelcomeLegal, "You must own a legal copy of the Xbox 360 game disc or ISO." },
-                { InstDestTitle, "Choose Installation Folder" },
-                { InstDestHint, "The game will be installed into this folder." },
-                { InstBrowse, "Browse" },
-                { InstIsoTitle, "Select Game ISO" },
-                { InstIsoHint, "Select a Dante's Inferno Xbox 360 ISO file (XISO)." },
-                { InstProgressTitle, "Installing..." },
-                { InstFinishTitle, "Installation Complete" },
-                { InstCreateShortcut, "Create desktop shortcut" },
-                { InstBack, "Back" },
-                { InstNext, "Next" },
-                { InstInstall, "Install" },
-                { InstFinish, "Finish" },
-                { InstInvalidDestTitle, "Invalid Destination" },
-                { InstInvalidDestMsg, "Please choose a valid destination folder." },
-                { InstInvalidIsoTitle, "Invalid ISO" },
-                { InstInvalidIsoMsg, "Please select a valid ISO file." },
-                { InstFolderDialog, "Select the installation folder" },
-                { InstIsoDialog, "Select Dante's Inferno ISO" },
-                { InstFailedTitle, "Install Error" },
-                { InstFailedMsg, "Installation failed:\n{0}" },
-                { InstShortcutErrorTitle, "Shortcut Error" },
-                { InstShortcutErrorMsg, "Could not create desktop shortcut:\n{0}" },
-                { InstFinishSummary, "Installed to:\n{0}\n\nGame data extracted to:\n{1}\n\nClick Finish to close the installer." },
-                { InstPreparing, "Preparing destination..." },
-                { InstRemovingOld, "Removing old game data..." },
-                { InstExtracting, "Extracting ISO to game folder (this may take a few minutes)..." },
-                { InstSkipExtract, "Game data already present, skipping extraction." },
-                { InstCopying, "Copying game files..." },
-                { InstCopied, "Copied {0}" },
-                { InstUpdatingConfig, "Updating configuration..." },
-                { InstCopyTu, "Copying Title Update 2 patch (default.xexp)..." },
-                { InstTuMissing, "WARNING: default.xexp not found in payload - TU2 will not be applied." },
-                { InstComplete, "Installation complete." },
-            };
-            foreach (var entry in new Dictionary<string, string>
-            {
                 { FrameRateExperimental, "(experimental)" },
                 { CheckPortable, "Portable mode: keep saves and settings in the game folder" },
                 { PortableTooltip, "Keeps saves, settings and shader data in the 'userdata' folder next to the game instead of Documents. Existing saves are copied there when you turn it on." },
@@ -333,11 +237,9 @@ namespace DantesInferno
                 { ImportIsoRunning, "Importing game files from the ISO (this takes a few minutes)..." },
                 { ImportIsoDone, "Game files imported. Press PLAY to start." },
                 { ImportIsoFailed, "Importing the ISO failed (exit code {0}). These files were not extracted correctly:" },
-            })
-                en[entry.Key] = entry.Value;
+            };
             _translations["en"] = en;
 
-            // Spanish
             var es = new Dictionary<string, string>
             {
                 { TabPlay, "JUGAR" },
@@ -357,7 +259,6 @@ namespace DantesInferno
                 { VersionLabel, "Version: {0}" },
                 { DlcTitle, "Contenido Descargable" },
                 { DlcDescription, "Pulsa Instalar DLC (o arrastra archivos a esta pagina) y elige tus archivos, carpetas o archivos comprimidos (.zip, .7z, .rar) de DLC. El launcher revisa cada paquete, guarda el DLC de Dante's Inferno y el juego lo instala al iniciar." },
-                { InstallDlc, "Instalar DLC..." },
                 { OpenDlcFolder, "Abrir Carpeta DLC" },
                 { OpenTuFolder, "Abrir Carpeta TU" },
                 { DlcFolderEmpty, "Carpeta DLC: vacia" },
@@ -422,7 +323,6 @@ namespace DantesInferno
                 { ResetToRecommended, "Restaurar Recomendado" },
                 { SaveSettings, "Guardar Ajustes" },
                 { UpdatesTitle, "Buscar Actualizaciones" },
-                { InstalledVersion, "Version instalada: {0}" },
                 { CheckForUpdates, "Buscar Actualizaciones" },
                 { DownloadInstall, "Descargar e Instalar" },
                 { ResolutionTooltip, "Resolucion de renderizado. Por defecto la de tu pantalla. Cualquier resolucion funciona: elige una o escribe ANCHOxALTO." },
@@ -433,52 +333,6 @@ namespace DantesInferno
                 { TuFolderTooltip, "Abre la carpeta del juego donde default.xexp (Actualizacion) debe colocarse." },
                 { ControllerTooltip, "Marcado = SDL3 (todas las familias de controladores). Desmarcado = XInput (solo pads Xbox)." },
                 { GlyphTooltip, "Que iconos de botones muestra el juego. Automatico sigue el mando o el teclado que uses; los iconos de teclado muestran tus asignaciones de teclas." },
-                { InstTitle, "Dante's Inferno - Instalador" },
-                { InstHeader, "DANTE'S INFERNO - INSTALADOR" },
-                { InstWelcomeTitle, "Bienvenido a los Nueve Circulos." },
-                { InstWelcomeIntro, "Este instalador:" },
-                { InstWelcomeStep1, "- Pedira la carpeta de destino" },
-                { InstWelcomeStep2, "- Pedira tu ISO original del juego" },
-                { InstWelcomeStep3, "- Extraera la ISO en el destino" },
-                { InstWelcomeStep4, "- Copiara los archivos del port a PC" },
-                { InstWelcomeStep5, "- Creara un acceso directo en el escritorio" },
-                { InstWelcomeLegal, "Debes poseer una copia legal del disco o ISO de Xbox 360." },
-                { InstDestTitle, "Elegir Carpeta de Instalacion" },
-                { InstDestHint, "El juego se instalara en esta carpeta." },
-                { InstBrowse, "Examinar" },
-                { InstIsoTitle, "Seleccionar ISO del Juego" },
-                { InstIsoHint, "Selecciona un archivo ISO de Dante's Inferno para Xbox 360 (XISO)." },
-                { InstProgressTitle, "Instalando..." },
-                { InstFinishTitle, "Instalacion Completa" },
-                { InstCreateShortcut, "Crear acceso directo en el escritorio" },
-                { InstBack, "Atras" },
-                { InstNext, "Siguiente" },
-                { InstInstall, "Instalar" },
-                { InstFinish, "Finalizar" },
-                { InstInvalidDestTitle, "Destino Invalido" },
-                { InstInvalidDestMsg, "Elige una carpeta de destino valida." },
-                { InstInvalidIsoTitle, "ISO Invalida" },
-                { InstInvalidIsoMsg, "Selecciona un archivo ISO valido." },
-                { InstFolderDialog, "Selecciona la carpeta de instalacion" },
-                { InstIsoDialog, "Selecciona la ISO de Dante's Inferno" },
-                { InstFailedTitle, "Error de Instalacion" },
-                { InstFailedMsg, "La instalacion fallo:\n{0}" },
-                { InstShortcutErrorTitle, "Error de Acceso Directo" },
-                { InstShortcutErrorMsg, "No se pudo crear el acceso directo:\n{0}" },
-                { InstFinishSummary, "Instalado en:\n{0}\n\nDatos del juego extraidos en:\n{1}\n\nHaz clic en Finalizar para cerrar el instalador." },
-                { InstPreparing, "Preparando destino..." },
-                { InstRemovingOld, "Eliminando datos antiguos del juego..." },
-                { InstExtracting, "Extrayendo la ISO a la carpeta del juego (puede tardar unos minutos)..." },
-                { InstSkipExtract, "Datos del juego ya presentes, se omite la extraccion." },
-                { InstCopying, "Copiando archivos del juego..." },
-                { InstCopied, "Copiado {0}" },
-                { InstUpdatingConfig, "Actualizando configuracion..." },
-                { InstCopyTu, "Copiando parche Title Update 2 (default.xexp)..." },
-                { InstTuMissing, "AVISO: default.xexp no encontrado en el payload - TU2 no se aplicara." },
-                { InstComplete, "Instalacion completa." },
-            };
-            foreach (var entry in new Dictionary<string, string>
-            {
                 { FrameRateExperimental, "(experimental)" },
                 { CheckPortable, "Modo portatil: guardar partidas y ajustes en la carpeta del juego" },
                 { PortableTooltip, "Guarda partidas, ajustes y datos de sombreadores en la carpeta 'userdata' junto al juego en lugar de Documentos. Las partidas existentes se copian alli al activarlo." },
@@ -490,11 +344,9 @@ namespace DantesInferno
                 { ImportIsoRunning, "Importando archivos del juego desde la ISO (tarda unos minutos)..." },
                 { ImportIsoDone, "Archivos del juego importados. Pulsa JUGAR para empezar." },
                 { ImportIsoFailed, "La importacion de la ISO fallo (codigo {0}). Estos archivos no se extrajeron bien:" },
-            })
-                es[entry.Key] = entry.Value;
+            };
             _translations["es"] = es;
 
-            // Portuguese
             var pt = new Dictionary<string, string>
             {
                 { TabPlay, "JOGAR" },
@@ -514,7 +366,6 @@ namespace DantesInferno
                 { VersionLabel, "Versao: {0}" },
                 { DlcTitle, "Conteudo Baixavel" },
                 { DlcDescription, "Clique em Instalar DLC (ou arraste arquivos para esta pagina) e escolha seus arquivos, pastas ou arquivos compactados (.zip, .7z, .rar) de DLC. O launcher verifica cada pacote, guarda o DLC de Dante's Inferno e o jogo o instala ao iniciar." },
-                { InstallDlc, "Instalar DLC..." },
                 { OpenDlcFolder, "Abrir Pasta DLC" },
                 { OpenTuFolder, "Abrir Pasta TU" },
                 { DlcFolderEmpty, "Pasta DLC: vazia" },
@@ -579,7 +430,6 @@ namespace DantesInferno
                 { ResetToRecommended, "Restaurar Recomendado" },
                 { SaveSettings, "Salvar Ajustes" },
                 { UpdatesTitle, "Verificar Atualizacoes" },
-                { InstalledVersion, "Versao instalada: {0}" },
                 { CheckForUpdates, "Verificar Atualizacoes" },
                 { DownloadInstall, "Baixar e Instalar" },
                 { ResolutionTooltip, "Resolucao de renderizacao. Por padrao a da sua tela. Qualquer resolucao funciona: escolha uma ou digite LARGURAxALTURA." },
@@ -590,52 +440,6 @@ namespace DantesInferno
                 { TuFolderTooltip, "Abre a pasta do jogo onde default.xexp (Atualizacao) deve ser colocado." },
                 { ControllerTooltip, "Marcado = SDL3 (todas as familias de controles). Desmarcado = XInput (apenas controles Xbox)." },
                 { GlyphTooltip, "Quais icones de botoes o jogo mostra. Automatico segue o controle ou o teclado em uso; os icones de teclado mostram suas teclas configuradas." },
-                { InstTitle, "Dante's Inferno - Instalador" },
-                { InstHeader, "DANTE'S INFERNO - INSTALADOR" },
-                { InstWelcomeTitle, "Bem-vindo aos Nove Circulos." },
-                { InstWelcomeIntro, "Este instalador ira:" },
-                { InstWelcomeStep1, "- Pedir a pasta de destino" },
-                { InstWelcomeStep2, "- Pedir a ISO original do jogo" },
-                { InstWelcomeStep3, "- Extrair a ISO no destino" },
-                { InstWelcomeStep4, "- Copiar os arquivos do port para PC" },
-                { InstWelcomeStep5, "- Criar um atalho na area de trabalho" },
-                { InstWelcomeLegal, "Voce deve possuir uma copia legal do disco ou ISO de Xbox 360." },
-                { InstDestTitle, "Escolher Pasta de Instalacao" },
-                { InstDestHint, "O jogo sera instalado nesta pasta." },
-                { InstBrowse, "Procurar" },
-                { InstIsoTitle, "Selecionar ISO do Jogo" },
-                { InstIsoHint, "Selecione um arquivo ISO de Dante's Inferno para Xbox 360 (XISO)." },
-                { InstProgressTitle, "Instalando..." },
-                { InstFinishTitle, "Instalacao Concluida" },
-                { InstCreateShortcut, "Criar atalho na area de trabalho" },
-                { InstBack, "Voltar" },
-                { InstNext, "Avancar" },
-                { InstInstall, "Instalar" },
-                { InstFinish, "Concluir" },
-                { InstInvalidDestTitle, "Destino Invalido" },
-                { InstInvalidDestMsg, "Escolha uma pasta de destino valida." },
-                { InstInvalidIsoTitle, "ISO Invalida" },
-                { InstInvalidIsoMsg, "Selecione um arquivo ISO valido." },
-                { InstFolderDialog, "Selecione a pasta de instalacao" },
-                { InstIsoDialog, "Selecione a ISO de Dante's Inferno" },
-                { InstFailedTitle, "Erro de Instalacao" },
-                { InstFailedMsg, "A instalacao falhou:\n{0}" },
-                { InstShortcutErrorTitle, "Erro de Atalho" },
-                { InstShortcutErrorMsg, "Nao foi possivel criar o atalho:\n{0}" },
-                { InstFinishSummary, "Instalado em:\n{0}\n\nDados do jogo extraidos em:\n{1}\n\nClique em Concluir para fechar o instalador." },
-                { InstPreparing, "Preparando destino..." },
-                { InstRemovingOld, "Removendo dados antigos do jogo..." },
-                { InstExtracting, "Extraindo a ISO para a pasta do jogo (pode demorar alguns minutos)..." },
-                { InstSkipExtract, "Dados do jogo ja presentes, extracao ignorada." },
-                { InstCopying, "Copiando arquivos do jogo..." },
-                { InstCopied, "Copiado {0}" },
-                { InstUpdatingConfig, "Atualizando configuracao..." },
-                { InstCopyTu, "Copiando patch Title Update 2 (default.xexp)..." },
-                { InstTuMissing, "AVISO: default.xexp nao encontrado no payload - TU2 nao sera aplicado." },
-                { InstComplete, "Instalacao concluida." },
-            };
-            foreach (var entry in new Dictionary<string, string>
-            {
                 { FrameRateExperimental, "(experimental)" },
                 { CheckPortable, "Modo portatil: manter saves e ajustes na pasta do jogo" },
                 { PortableTooltip, "Mantem saves, ajustes e dados de shaders na pasta 'userdata' ao lado do jogo em vez de Documentos. Os saves existentes sao copiados para la ao ativar." },
@@ -647,11 +451,9 @@ namespace DantesInferno
                 { ImportIsoRunning, "Importando arquivos do jogo da ISO (leva alguns minutos)..." },
                 { ImportIsoDone, "Arquivos do jogo importados. Clique em JOGAR para comecar." },
                 { ImportIsoFailed, "A importacao da ISO falhou (codigo {0}). Estes arquivos nao foram extraidos corretamente:" },
-            })
-                pt[entry.Key] = entry.Value;
+            };
             _translations["pt"] = pt;
 
-            // French
             var fr = new Dictionary<string, string>
             {
                 { TabPlay, "JOUER" },
@@ -671,7 +473,6 @@ namespace DantesInferno
                 { VersionLabel, "Version : {0}" },
                 { DlcTitle, "Contenu Telechargeable" },
                 { DlcDescription, "Cliquez sur Installer un DLC (ou deposez des fichiers sur cette page) et choisissez vos fichiers, dossiers ou archives (.zip, .7z, .rar) de DLC. Le launcher verifie chaque paquet, garde le DLC de Dante's Inferno et le jeu l'installe au prochain demarrage." },
-                { InstallDlc, "Installer un DLC..." },
                 { OpenDlcFolder, "Ouvrir le Dossier DLC" },
                 { OpenTuFolder, "Ouvrir le Dossier TU" },
                 { DlcFolderEmpty, "Dossier DLC : vide" },
@@ -736,7 +537,6 @@ namespace DantesInferno
                 { ResetToRecommended, "Restaurer les Parametres Recommandes" },
                 { SaveSettings, "Enregistrer les Parametres" },
                 { UpdatesTitle, "Verifier les Mises a Jour" },
-                { InstalledVersion, "Version installee : {0}" },
                 { CheckForUpdates, "Verifier les Mises a Jour" },
                 { DownloadInstall, "Telecharger et Installer" },
                 { ResolutionTooltip, "Resolution de rendu. Par defaut celle de votre ecran. Toute resolution fonctionne : choisissez-en une ou tapez LARGEURxHAUTEUR." },
@@ -747,52 +547,6 @@ namespace DantesInferno
                 { TuFolderTooltip, "Ouvre le dossier du jeu ou default.xexp (Mise a Jour) doit etre place." },
                 { ControllerTooltip, "Coche = SDL3 (toutes les familles de controleurs). Decoche = XInput (manettes Xbox uniquement)." },
                 { GlyphTooltip, "Icones de boutons affichees par le jeu. Automatique suit la manette ou le clavier utilise ; les icones clavier montrent vos touches." },
-                { InstTitle, "Dante's Inferno - Installateur" },
-                { InstHeader, "DANTE'S INFERNO - INSTALLATEUR" },
-                { InstWelcomeTitle, "Bienvenue dans les Neuf Cercles." },
-                { InstWelcomeIntro, "Cet installateur va :" },
-                { InstWelcomeStep1, "- Demander le dossier de destination" },
-                { InstWelcomeStep2, "- Demander votre ISO originale du jeu" },
-                { InstWelcomeStep3, "- Extraire l'ISO vers la destination" },
-                { InstWelcomeStep4, "- Copier les fichiers du port PC" },
-                { InstWelcomeStep5, "- Creer un raccourci bureau" },
-                { InstWelcomeLegal, "Vous devez posseder une copie legale du disque ou de l'ISO Xbox 360." },
-                { InstDestTitle, "Choisir le Dossier d'Installation" },
-                { InstDestHint, "Le jeu sera installe dans ce dossier." },
-                { InstBrowse, "Parcourir" },
-                { InstIsoTitle, "Selectionner l'ISO du Jeu" },
-                { InstIsoHint, "Selectionnez un fichier ISO Dante's Inferno Xbox 360 (XISO)." },
-                { InstProgressTitle, "Installation..." },
-                { InstFinishTitle, "Installation Terminee" },
-                { InstCreateShortcut, "Creer un raccourci bureau" },
-                { InstBack, "Retour" },
-                { InstNext, "Suivant" },
-                { InstInstall, "Installer" },
-                { InstFinish, "Terminer" },
-                { InstInvalidDestTitle, "Destination Invalide" },
-                { InstInvalidDestMsg, "Veuillez choisir un dossier de destination valide." },
-                { InstInvalidIsoTitle, "ISO Invalide" },
-                { InstInvalidIsoMsg, "Veuillez selectionner un fichier ISO valide." },
-                { InstFolderDialog, "Selectionnez le dossier d'installation" },
-                { InstIsoDialog, "Selectionnez l'ISO de Dante's Inferno" },
-                { InstFailedTitle, "Erreur d'Installation" },
-                { InstFailedMsg, "L'installation a echoue :\n{0}" },
-                { InstShortcutErrorTitle, "Erreur de Raccourci" },
-                { InstShortcutErrorMsg, "Impossible de creer le raccourci bureau :\n{0}" },
-                { InstFinishSummary, "Installe dans :\n{0}\n\nDonnees du jeu extraites dans :\n{1}\n\nCliquez sur Terminer pour fermer l'installateur." },
-                { InstPreparing, "Preparation de la destination..." },
-                { InstRemovingOld, "Suppression des anciennes donnees du jeu..." },
-                { InstExtracting, "Extraction de l'ISO vers le dossier du jeu (cela peut prendre quelques minutes)..." },
-                { InstSkipExtract, "Donnees du jeu deja presentes, extraction ignoree." },
-                { InstCopying, "Copie des fichiers du jeu..." },
-                { InstCopied, "Copie {0}" },
-                { InstUpdatingConfig, "Mise a jour de la configuration..." },
-                { InstCopyTu, "Copie du patch Title Update 2 (default.xexp)..." },
-                { InstTuMissing, "AVERTISSEMENT : default.xexp introuvable dans le payload - TU2 ne sera pas applique." },
-                { InstComplete, "Installation terminee." },
-            };
-            foreach (var entry in new Dictionary<string, string>
-            {
                 { FrameRateExperimental, "(experimental)" },
                 { CheckPortable, "Mode portable : garder sauvegardes et parametres dans le dossier du jeu" },
                 { PortableTooltip, "Garde les sauvegardes, les parametres et les donnees de shaders dans le dossier 'userdata' a cote du jeu au lieu de Documents. Les sauvegardes existantes y sont copiees a l'activation." },
@@ -804,11 +558,9 @@ namespace DantesInferno
                 { ImportIsoRunning, "Importation des fichiers du jeu depuis l'ISO (quelques minutes)..." },
                 { ImportIsoDone, "Fichiers du jeu importes. Cliquez sur JOUER pour commencer." },
                 { ImportIsoFailed, "L'importation de l'ISO a echoue (code {0}). Ces fichiers n'ont pas ete extraits correctement :" },
-            })
-                fr[entry.Key] = entry.Value;
+            };
             _translations["fr"] = fr;
 
-            // Italian
             var it = new Dictionary<string, string>
             {
                 { TabPlay, "GIOCA" },
@@ -828,7 +580,6 @@ namespace DantesInferno
                 { VersionLabel, "Versione: {0}" },
                 { DlcTitle, "Contenuti Scaricabili" },
                 { DlcDescription, "Premi Installa DLC (o trascina i file in questa pagina) e scegli file, cartelle o archivi (.zip, .7z, .rar) dei DLC. Il launcher controlla ogni pacchetto, tiene i DLC di Dante's Inferno e il gioco li installa al prossimo avvio." },
-                { InstallDlc, "Installa DLC..." },
                 { OpenDlcFolder, "Apri Cartella DLC" },
                 { OpenTuFolder, "Apri Cartella TU" },
                 { DlcFolderEmpty, "Cartella DLC: vuota" },
@@ -893,7 +644,6 @@ namespace DantesInferno
                 { ResetToRecommended, "Ripristina Consigliate" },
                 { SaveSettings, "Salva Impostazioni" },
                 { UpdatesTitle, "Cerca Aggiornamenti" },
-                { InstalledVersion, "Versione installata: {0}" },
                 { CheckForUpdates, "Cerca Aggiornamenti" },
                 { DownloadInstall, "Scarica e Installa" },
                 { ResolutionTooltip, "Risoluzione di rendering. Predefinita: quella del monitor. Qualsiasi risoluzione funziona: scegline una o scrivi LARGHEZZAxALTEZZA." },
@@ -904,52 +654,6 @@ namespace DantesInferno
                 { TuFolderTooltip, "Apre la cartella di gioco dove va collocato default.xexp (Title Update)." },
                 { ControllerTooltip, "Selezionato = SDL3 (tutte le famiglie di controller). Deselezionato = XInput (solo pad Xbox)." },
                 { GlyphTooltip, "Quali icone dei pulsanti mostra il gioco. Automatico segue il controller o la tastiera in uso; le icone della tastiera mostrano i tasti assegnati." },
-                { InstTitle, "Dante's Inferno - Installer" },
-                { InstHeader, "DANTE'S INFERNO - INSTALLER" },
-                { InstWelcomeTitle, "Benvenuto nei Nove Cerchi." },
-                { InstWelcomeIntro, "Questo installer:" },
-                { InstWelcomeStep1, "- Chiedera la cartella di destinazione" },
-                { InstWelcomeStep2, "- Chiedera la ISO originale del gioco" },
-                { InstWelcomeStep3, "- Estrarra la ISO nella destinazione" },
-                { InstWelcomeStep4, "- Copiera i file del port PC" },
-                { InstWelcomeStep5, "- Creera un collegamento sul desktop" },
-                { InstWelcomeLegal, "Devi possedere una copia legale del disco o della ISO Xbox 360." },
-                { InstDestTitle, "Scegli Cartella di Installazione" },
-                { InstDestHint, "Il gioco verra installato in questa cartella." },
-                { InstBrowse, "Sfoglia" },
-                { InstIsoTitle, "Seleziona ISO del Gioco" },
-                { InstIsoHint, "Seleziona un file ISO di Dante's Inferno per Xbox 360 (XISO)." },
-                { InstProgressTitle, "Installazione in corso..." },
-                { InstFinishTitle, "Installazione Completata" },
-                { InstCreateShortcut, "Crea collegamento sul desktop" },
-                { InstBack, "Indietro" },
-                { InstNext, "Avanti" },
-                { InstInstall, "Installa" },
-                { InstFinish, "Fine" },
-                { InstInvalidDestTitle, "Destinazione Non Valida" },
-                { InstInvalidDestMsg, "Scegli una cartella di destinazione valida." },
-                { InstInvalidIsoTitle, "ISO Non Valida" },
-                { InstInvalidIsoMsg, "Seleziona un file ISO valido." },
-                { InstFolderDialog, "Seleziona la cartella di installazione" },
-                { InstIsoDialog, "Seleziona la ISO di Dante's Inferno" },
-                { InstFailedTitle, "Errore di Installazione" },
-                { InstFailedMsg, "Installazione non riuscita:\n{0}" },
-                { InstShortcutErrorTitle, "Errore Collegamento" },
-                { InstShortcutErrorMsg, "Impossibile creare il collegamento sul desktop:\n{0}" },
-                { InstFinishSummary, "Installato in:\n{0}\n\nDati di gioco estratti in:\n{1}\n\nClicca Fine per chiudere l'installer." },
-                { InstPreparing, "Preparazione destinazione..." },
-                { InstRemovingOld, "Rimozione dati di gioco precedenti..." },
-                { InstExtracting, "Estrazione ISO nella cartella di gioco (puo richiedere alcuni minuti)..." },
-                { InstSkipExtract, "Dati di gioco gia presenti, estrazione saltata." },
-                { InstCopying, "Copia file di gioco..." },
-                { InstCopied, "Copiato {0}" },
-                { InstUpdatingConfig, "Aggiornamento configurazione..." },
-                { InstCopyTu, "Copia patch Title Update 2 (default.xexp)..." },
-                { InstTuMissing, "AVVISO: default.xexp non trovato nel payload - TU2 non verra applicato." },
-                { InstComplete, "Installazione completata." },
-            };
-            foreach (var entry in new Dictionary<string, string>
-            {
                 { FrameRateExperimental, "(sperimentale)" },
                 { CheckPortable, "Modalita portatile: salvataggi e impostazioni nella cartella del gioco" },
                 { PortableTooltip, "Tiene salvataggi, impostazioni e dati degli shader nella cartella 'userdata' accanto al gioco invece che in Documenti. I salvataggi esistenti vengono copiati li quando la attivi." },
@@ -961,8 +665,7 @@ namespace DantesInferno
                 { ImportIsoRunning, "Importazione dei file del gioco dalla ISO (qualche minuto)..." },
                 { ImportIsoDone, "File del gioco importati. Premi GIOCA per iniziare." },
                 { ImportIsoFailed, "Importazione della ISO non riuscita (codice {0}). Questi file non sono stati estratti correttamente:" },
-            })
-                it[entry.Key] = entry.Value;
+            };
             _translations["it"] = it;
         }
 
