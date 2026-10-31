@@ -14,7 +14,8 @@ Xenos Vulkan plugin (`librexgpu-xenos.so`); the Windows-only native renderer is 
 3. Cross-compile with NDK r27c:
    `-DCMAKE_TOOLCHAIN_FILE=<ndk>/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a
    -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared -DDANTESINFERNO_NATIVE_RENDERER=OFF
-   -DDANTESINFERNO_BUILD_LAUNCHER=OFF -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_HOST_CLI=<host rexglue>`
+   -DDANTESINFERNO_BUILD_LAUNCHER=OFF -DDANTESINFERNO_FIDELITYFX=OFF -DREXGLUE_ENABLE_TRACY=OFF
+   -DREXGLUE_HOST_CLI=<host rexglue>`
    and build the `dantes_inferno` and `rexgpu-xenos` targets.
 4. Build the diagnostics helper:
    `<ndk>/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang -shared -fPIC -O1
