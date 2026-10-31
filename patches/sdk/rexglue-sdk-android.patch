@@ -488,7 +488,7 @@ index 0000000..5fc7ee9
 +
 +#endif  // REX_PLATFORM_ANDROID
 diff --git a/src/core/filesystem_posix.cpp b/src/core/filesystem_posix.cpp
-index ef5bdf4..236309d 100644
+index ef5bdf4..a57b916 100644
 --- a/src/core/filesystem_posix.cpp
 +++ b/src/core/filesystem_posix.cpp
 @@ -49,6 +49,10 @@ using rex_off64_t = off64_t;
@@ -519,6 +519,23 @@ index ef5bdf4..236309d 100644
  #else
    char buff[FILENAME_MAX] = "";
    readlink("/proc/self/exe", buff, FILENAME_MAX);
+@@ -124,7 +138,15 @@ std::filesystem::path GetUserFolder() {
+ }
+ 
+ FILE* OpenFile(const std::filesystem::path& path, const std::string_view mode) {
+-  return fopen(path.c_str(), std::string(mode).c_str());
++  FILE* file = fopen(path.c_str(), std::string(mode).c_str());
++  // Bionic starts "a+" streams at the end of the file, glibc and MSVC at the
++  // start. Callers read the existing contents first (the shader and pipeline
++  // storage headers), so start at the beginning everywhere; writes still
++  // append.
++  if (file && mode.find('a') != std::string_view::npos) {
++    rewind(file);
++  }
++  return file;
+ }
+ 
+ bool Seek(FILE* file, int64_t offset, int origin) {
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..01fcde9 100644
 --- a/src/core/memory_posix.cpp
@@ -1053,6 +1070,23 @@ index 19e7170..7b0e755 100644
        command_pool_create_info.queueFamilyIndex = vulkan_device->queue_family_graphics_compute();
        if (dfn.vkCreateCommandPool(device, &command_pool_create_info, nullptr,
                                    &command_buffer.pool) != VK_SUCCESS) {
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 79a787f..57a7966 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -3927,7 +3927,11 @@ void VulkanPipelineCache::StorageWriteThread() {
+         spv_record = std::move(storage_write_spv_queue_.front());
+         storage_write_spv_queue_.pop_front();
+       }
+-      if (!shader && !write_pipeline && spv_record.empty()) {
++      // Flush before sleeping: otherwise the flush only happens on the next
++      // request, and Android kills apps rather than letting them close the
++      // files, losing whatever was still buffered.
++      if (!shader && !write_pipeline && spv_record.empty() && !flush_shaders &&
++          !flush_pipelines) {
+         storage_write_request_cond_.wait(lock);
+         continue;
+       }
 diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
 index 5de4b70..f4c019e 100644
 --- a/src/rexglue/CMakeLists.txt
