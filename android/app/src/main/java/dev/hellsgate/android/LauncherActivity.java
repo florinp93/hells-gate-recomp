@@ -107,6 +107,28 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("lock_30fps", on).apply());
         root.addView(fps30Box);
 
+        TextView aspectLabel = new TextView(this);
+        aspectLabel.setText("Aspect ratio (wider than 16:9 widens the view to fill the screen)");
+        aspectLabel.setTextColor(Color.WHITE);
+        aspectLabel.setPadding(0, pad / 2, 0, 0);
+        root.addView(aspectLabel);
+
+        android.widget.RadioGroup aspectGroup = new android.widget.RadioGroup(this);
+        aspectGroup.setOrientation(LinearLayout.HORIZONTAL);
+        String currentAspect = GamePaths.prefs(this).getString("aspect", GamePaths.ASPECT_AUTO);
+        for (String option : GamePaths.ASPECT_OPTIONS) {
+            android.widget.RadioButton button = new android.widget.RadioButton(this);
+            button.setText(option);
+            button.setTextColor(Color.WHITE);
+            button.setId(View.generateViewId());
+            aspectGroup.addView(button);
+            if (option.equals(currentAspect)) button.setChecked(true);
+            button.setOnCheckedChangeListener((b, on) -> {
+                if (on) GamePaths.prefs(this).edit().putString("aspect", option).apply();
+            });
+        }
+        root.addView(aspectGroup);
+
         android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
         rpBox.setText("Faster rendering (experimental: classic render passes; "
                 + "may cause wrong colours or freezes)");
