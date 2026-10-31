@@ -1,4 +1,5 @@
 #include "pipeline_storage.h"
+#include "path_util.h"
 
 #include <rex/logging/macros.h>
 
@@ -50,7 +51,7 @@ Header CurrentHeader() {
 
 std::vector<uint8_t> ReadFile(const std::filesystem::path& path) {
   std::vector<uint8_t> data;
-  std::FILE* file = std::fopen(path.string().c_str(), "rb");
+  std::FILE* file = path_util::Open(path, "rb");
   if (!file) return data;
   std::fseek(file, 0, SEEK_END);
   long size = std::ftell(file);
@@ -72,7 +73,7 @@ PipelineStorage::PipelineStorage(std::filesystem::path path,
   if (!shipped.empty() && std::filesystem::exists(shipped, ec)) {
     Load(shipped);
     REXLOG_INFO("PIPELINES: {} shaders, {} pipelines in {}", shaders_.size(), pipelines_.size(),
-                shipped.string());
+                path_util::Utf8(shipped));
   }
   size_t shipped_shaders = shaders_.size(), shipped_pipelines = pipelines_.size();
   std::filesystem::create_directories(path_.parent_path(), ec);
@@ -82,14 +83,14 @@ PipelineStorage::PipelineStorage(std::filesystem::path path,
     if (std::filesystem::file_size(path_, ec) != valid) {
       std::filesystem::resize_file(path_, valid, ec);
     }
-    file_ = std::fopen(path_.string().c_str(), "ab");
+    file_ = path_util::Open(path_, "ab");
   } else {
     if (std::filesystem::exists(path_, ec)) {
       auto old = path_;
       old += ".old";
       std::filesystem::rename(path_, old, ec);
     }
-    file_ = std::fopen(path_.string().c_str(), "wb");
+    file_ = path_util::Open(path_, "wb");
     if (file_) {
       Header header = CurrentHeader();
       std::fwrite(&header, sizeof(header), 1, file_);
@@ -98,11 +99,11 @@ PipelineStorage::PipelineStorage(std::filesystem::path path,
   }
   if (!file_) {
     REXLOG_WARN("PIPELINES: cannot write {}; shaders and pipelines are not recorded",
-                path_.string());
+                path_util::Utf8(path_));
   }
   REXLOG_INFO("PIPELINES: {} more shaders, {} more pipelines recorded in {}",
               shaders_.size() - shipped_shaders, pipelines_.size() - shipped_pipelines,
-              path_.string());
+              path_util::Utf8(path_));
 }
 
 PipelineStorage::~PipelineStorage() {
@@ -116,7 +117,7 @@ uint64_t PipelineStorage::Load(const std::filesystem::path& path) {
   Header expected = CurrentHeader();
   if (data.size() < sizeof(Header) || std::memcmp(data.data(), &expected, sizeof(Header))) {
     if (!data.empty()) {
-      REXLOG_WARN("PIPELINES: {} is from another version, not used", path.string());
+      REXLOG_WARN("PIPELINES: {} is from another version, not used", path_util::Utf8(path));
     }
     return 0;
   }

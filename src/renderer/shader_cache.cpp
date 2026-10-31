@@ -1,4 +1,5 @@
 #include "shader_cache.h"
+#include "path_util.h"
 
 #include "pipeline_storage.h"
 #include "png_dump.h"
@@ -162,7 +163,7 @@ struct ShaderCache::Impl {
         auto path = FrameDumpDirectory() /
                     fmt::format("{}_{:016X}.txt",
                                 type == rg::xenos::ShaderType::kVertex ? "vs" : "ps", hash);
-        if (std::FILE* f = std::fopen(path.string().c_str(), "wb")) {
+        if (std::FILE* f = path_util::Open(path, "wb")) {
           const std::string& text = entry.shader->ucode_disassembly();
           std::fwrite(text.data(), 1, text.size(), f);
           std::fclose(f);

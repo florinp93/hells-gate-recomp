@@ -1,6 +1,7 @@
 #pragma once
 
 #include "overlay/achievement_sound.h"
+#include "path_util.h"
 #include "overlay/achievement_ui.h"
 #include "overlay/fps_overlay.h"
 #include "overlay/overlay_style.h"
@@ -8,6 +9,7 @@
 #include "renderer/renderer.h"
 #include "renderer/renderer_config.h"
 #include "renderer/ui_overlay.h"
+#include "crash_log.h"
 #include "session_info.h"
 #include "timer_resolution.h"
 #include "user_paths.h"
@@ -20,7 +22,9 @@
 #include <rex/input/flags.h>
 #include <rex/input/input_system.h>
 #include <rex/logging/macros.h>
+#include <rex/memory/utils.h>
 #include <rex/rex_app.h>
+#include <rex/system.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
@@ -28,6 +32,7 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/keybinds.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -112,51 +117,50 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    crash_log::Install();
     config.gpu_plugin = "xenos";
 
     REXCVAR_SET(input_backend, std::string("sdl"));
 
     // Keyboard / mouse layout, unless the user or the launcher set one.
-    auto keybind_default = [](const char* name, const char* value) {
+    static constexpr std::pair<const char*, const char*> kKeybindDefaults[] = {
+        {"mnk_mode", "true"},
+        {"mnk_mouse", "true"},
+        {"mnk_sensitivity", "1.5"},
+        {"keybind_a", "Space"},
+        {"keybind_b", "F"},
+        {"keybind_x", "LMB"},
+        {"keybind_y", "E"},
+        {"keybind_left_shoulder", "Q"},
+        {"keybind_right_shoulder", "RMB"},
+        {"keybind_left_trigger", "Shift"},
+        {"keybind_right_trigger", "Control"},
+        {"keybind_lstick_up", "W"},
+        {"keybind_lstick_down", "S"},
+        {"keybind_lstick_left", "A"},
+        {"keybind_lstick_right", "D"},
+        {"keybind_lstick_press", "X"},
+        {"keybind_rstick_up", "Up"},
+        {"keybind_rstick_down", "Down"},
+        {"keybind_rstick_left", "Left"},
+        {"keybind_rstick_right", "Right"},
+        {"keybind_rstick_press", "R"},
+        {"keybind_dpad_up", "Shift+Up"},
+        {"keybind_dpad_down", "Shift+Down"},
+        {"keybind_dpad_left", "Shift+Left"},
+        {"keybind_dpad_right", "Shift+Right"},
+        {"keybind_back", "Tab"},
+        {"keybind_start", "Escape"},
+    };
+    for (const auto& [name, value] : kKeybindDefaults) {
       if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault) {
         rex::cvar::SetFlagByName(name, value);
       }
-    };
-    keybind_default("mnk_mode", "true");
-    keybind_default("mnk_mouse", "true");
-    keybind_default("mnk_sensitivity", "1.5");
-    keybind_default("keybind_a", "Space");
-    keybind_default("keybind_b", "F");
-    keybind_default("keybind_x", "LMB");
-    keybind_default("keybind_y", "E");
-    keybind_default("keybind_left_shoulder", "Q");
-    keybind_default("keybind_right_shoulder", "RMB");
-    keybind_default("keybind_left_trigger", "Shift");
-    keybind_default("keybind_right_trigger", "Control");
-    keybind_default("keybind_lstick_up", "W");
-    keybind_default("keybind_lstick_down", "S");
-    keybind_default("keybind_lstick_left", "A");
-    keybind_default("keybind_lstick_right", "D");
-    keybind_default("keybind_lstick_press", "X");
-    keybind_default("keybind_rstick_up", "Up");
-    keybind_default("keybind_rstick_down", "Down");
-    keybind_default("keybind_rstick_left", "Left");
-    keybind_default("keybind_rstick_right", "Right");
-    keybind_default("keybind_rstick_press", "R");
-    keybind_default("keybind_dpad_up", "Shift+Up");
-    keybind_default("keybind_dpad_down", "Shift+Down");
-    keybind_default("keybind_dpad_left", "Shift+Left");
-    keybind_default("keybind_dpad_right", "Shift+Right");
-    keybind_default("keybind_back", "Tab");
-    keybind_default("keybind_start", "Escape");
+    }
 
     double target_aspect = REXCVAR_GET(ultrawide_target_aspect);
-    if (target_aspect > 0.0) {
-      g_ultrawide_target_aspect = static_cast<float>(target_aspect);
-      REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
-    } else {
-      REXLOG_INFO("ULTRAWIDE: disabled (target_aspect={:.4f})", target_aspect);
-    }
+    if (target_aspect > 0.0) g_ultrawide_target_aspect = static_cast<float>(target_aspect);
+    REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
   }
 
   // The game starts once the renderer has built the recorded shaders and
@@ -188,28 +192,41 @@ class DantesInfernoApp : public rex::ReXApp {
   void OnPreLaunchModule() override {
     uint8_t* membase = runtime()->memory()->virtual_membase();
 
+    if (rex::memory::load_and_swap<uint32_t>(membase + 0x82879110) != 0x3C8082CEu) {
+      auto msg = fmt::format(
+          "Title Update 2 was not applied.\n\ndefault.xexp is missing or does not match "
+          "default.xex in:\n{}\n\nStart the game from the launcher, which puts it in place, or "
+          "copy tu\\default.xexp from the release into that folder.",
+          path_util::Utf8(game_data_root()));
+      REXLOG_CRITICAL("{}", msg);
+      if (auto logger = rex::GetLogger()) logger->flush();
+      rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+      std::_Exit(1);
+    }
+
     // The save system's setjmp must not switch fibers (dantes_inferno_hooks.h):
-    // clear the fiber-switch callback. TU2 is recognised by its setjmp.
-    auto* dispatcher = runtime()->function_dispatcher();
-    const bool is_tu2 = dispatcher && dispatcher->GetFunction(0x82879110);
-    uint32_t slot = is_tu2 ? 0x82CE68E4u : 0x82B101E4u;
-    *reinterpret_cast<uint32_t*>(membase + slot) = 0u;
+    // clear the fiber-switch callback.
+    *reinterpret_cast<uint32_t*>(membase + 0x82CE68E4u) = 0u;
 
     if (REXCVAR_GET(dlc_dump_image)) {
       std::filesystem::path dump_path =
           std::filesystem::current_path() / "logs" / "guest_image.bin";
       std::filesystem::create_directories(dump_path.parent_path());
-      FILE* f = fopen(dump_path.string().c_str(), "wb");
+      FILE* f = path_util::Open(dump_path, "wb");
       if (f) {
         fwrite(membase + 0x82000000, 1, 0xD70000, f);
         fclose(f);
-        REXLOG_INFO("DLC-MOD: dumped guest image to {}", dump_path.string());
+        REXLOG_INFO("DLC-MOD: dumped guest image to {}", path_util::Utf8(dump_path));
       }
     }
   }
 
   void OnPostSetup() override {
     session_info::Log();
+    crash_log::LogGameFiles(game_data_root());
+    if (auto* input = dynamic_cast<rex::input::InputSystem*>(runtime()->input_system())) {
+      input->SetDeviceAssignment(std::make_unique<rex::input::SharedAssignment>());
+    }
     timer_resolution::Apply();
     user_paths::Report(user_data_root());
     renderer::ConfigureSyncOnlyGpu();
@@ -402,14 +419,11 @@ class DantesInfernoApp : public rex::ReXApp {
     });
 
     rex::ui::RegisterBind("bind_fast_forward", "F2", "Toggle 50x fast-forward", [this] {
-      double current = REXCVAR_GET(time_scalar);
-      bool fast = current > 1.0;
+      bool fast = REXCVAR_GET(time_scalar) > 1.0;
       double target = fast ? 1.0 : 50.0;
       rex::cvar::SetFlagByName("time_scalar", std::to_string(target));
       rex::chrono::Clock::set_guest_time_scalar(target);
-      if (!fast) {
-        saved_vsync_ = rex::cvar::Query<bool>("vsync");
-      }
+      if (!fast) saved_vsync_ = rex::cvar::Query<bool>("vsync");
       rex::cvar::SetFlagByName("vsync", fast ? (saved_vsync_ ? "true" : "false") : "false");
     });
 
@@ -463,7 +477,7 @@ class DantesInfernoApp : public rex::ReXApp {
       }
       if (!entry.is_directory()) continue;
 
-      const auto name = entry.path().filename().string();
+      const auto name = path_util::Utf8(entry.path().filename());
       std::filesystem::path dest;
       if (is_hex_name(name, 16)) {
         dest = user_root / name;
@@ -498,8 +512,24 @@ class DantesInfernoApp : public rex::ReXApp {
 
     int new_installed = 0;
     for (auto& pkg : packages) {
-      auto rel = std::filesystem::relative(pkg, root).string();
+      auto rel = path_util::Utf8(std::filesystem::relative(pkg, root));
       if (installed.count(rel)) continue;
+
+      std::array<uint8_t, 0x364> header{};
+      std::ifstream file(pkg, std::ios::binary);
+      file.read(reinterpret_cast<char*>(header.data()), header.size());
+      auto be32 = [&](size_t offset) {
+        return uint32_t(header[offset]) << 24 | uint32_t(header[offset + 1]) << 16 |
+               uint32_t(header[offset + 2]) << 8 | uint32_t(header[offset + 3]);
+      };
+      const std::string magic(reinterpret_cast<const char*>(header.data()), 4);
+      if (file.gcount() != std::streamsize(header.size()) ||
+          (magic != "LIVE" && magic != "PIRS" && magic != "CON ") || be32(0x344) != 0x2 ||
+          be32(0x360) != 0x454108CF) {
+        REXLOG_INFO("Not Dante's Inferno DLC, skipped: {} (content type {:08X}, title {:08X})",
+                    rel, be32(0x344), be32(0x360));
+        continue;
+      }
 
       REXLOG_INFO("Installing DLC package: {}", rel);
       auto result = content_manager->InstallContent(pkg);
@@ -523,22 +553,7 @@ class DantesInfernoApp : public rex::ReXApp {
     renderer::SetOverlayFrameRequest(nullptr);
     renderer::Stop();
     overlay::ShutdownAchievementSound();
-    rex::ui::UnregisterBind("bind_fast_forward");
-    rex::ui::UnregisterBind("bind_pass_trace");
-    rex::ui::UnregisterBind("bind_d3d_trace");
-    rex::ui::UnregisterBind("bind_verify_gpu_state");
-#ifdef DANTESINFERNO_DEV_CHEATS
-    rex::ui::UnregisterBind("bind_cheat_god");
-    rex::ui::UnregisterBind("bind_cheat_one_hit");
-#endif
-    rex::ui::UnregisterBind("bind_host_rendering");
-    rex::ui::UnregisterBind("bind_dante_debug_view");
-    rex::ui::UnregisterBind("bind_dante_record");
-    rex::ui::UnregisterBind("bind_dante_replay");
-    rex::ui::UnregisterBind("bind_dante_smaa");
-    rex::ui::UnregisterBind("bind_rdoc_capture");
-    rex::ui::UnregisterBind("bind_fps_overlay");
-    rex::ui::UnregisterBind("bind_exit_game");
+    for (const char* bind : kBinds) rex::ui::UnregisterBind(bind);
     rex::cvar::UnregisterChangeCallbacks("time_scalar");
     rex::cvar::UnregisterChangeCallbacks("ultrawide_target_aspect");
     fps_overlay_.reset();
@@ -548,6 +563,13 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
  private:
+  static constexpr const char* kBinds[] = {
+      "bind_exit_game",      "bind_fps_overlay",      "bind_pass_trace",   "bind_d3d_trace",
+      "bind_host_rendering", "bind_dante_debug_view", "bind_rdoc_capture", "bind_dante_smaa",
+      "bind_dante_replay",   "bind_dante_record",     "bind_cheat_god",    "bind_cheat_one_hit",
+      "bind_verify_gpu_state", "bind_fast_forward",
+  };
+
   // Achievement icons are textures of the drawer that draws ImGui.
   rex::ui::ImmediateDrawer* IconDrawer() const {
     return overlay_drawer_ ? overlay_drawer_.get() : immediate_drawer();

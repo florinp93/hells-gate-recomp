@@ -5414,3 +5414,353 @@ index 42b0468..6218710 100644
      }
    }
    return true;
+diff --git a/include/rex/audio/sdl/sdl_audio_driver.h b/include/rex/audio/sdl/sdl_audio_driver.h
+index f8949ca..1b8101b 100644
+--- a/include/rex/audio/sdl/sdl_audio_driver.h
++++ b/include/rex/audio/sdl/sdl_audio_driver.h
+@@ -49,6 +49,11 @@ class SDLAudioDriver : public AudioDriver {
+   std::queue<float*> frames_queued_ = {};
+   std::stack<float*> frames_unused_ = {};
+   std::mutex frames_mutex_ = {};
++
++  bool playing_ = false;
++  uint32_t underruns_ = 0;
++  uint32_t silent_buffers_ = 0;
++  uint64_t underrun_window_start_ = 0;
+ };
+ 
+ }  // namespace rex::audio::sdl
+diff --git a/include/rex/system/xam/content_manager.h b/include/rex/system/xam/content_manager.h
+index 949d185..a094f71 100644
+--- a/include/rex/system/xam/content_manager.h
++++ b/include/rex/system/xam/content_manager.h
+@@ -11,6 +11,7 @@
+ 
+ #pragma once
+ 
++#include <cstring>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
+@@ -69,7 +70,7 @@ struct XCONTENT_DATA {
+ 
+   std::string file_name() const {
+     std::string value;
+-    value.assign(file_name_raw, std::min(strlen(file_name_raw), countof(file_name_raw)));
++    value.assign(file_name_raw, strnlen(file_name_raw, countof(file_name_raw)));
+     return value;
+   }
+ 
+diff --git a/include/rex/ui/flags.h b/include/rex/ui/flags.h
+index fa2ef60..7ba86a8 100644
+--- a/include/rex/ui/flags.h
++++ b/include/rex/ui/flags.h
+@@ -29,6 +29,7 @@ REXCVAR_DECLARE(bool, host_present_from_non_ui_thread);
+ REXCVAR_DECLARE(int32_t, window_width);
+ REXCVAR_DECLARE(int32_t, window_height);
+ REXCVAR_DECLARE(bool, fullscreen);
++REXCVAR_DECLARE(std::string, fullscreen_exclusive);
+ REXCVAR_DECLARE(int32_t, monitor);
+ REXCVAR_DECLARE(std::string, video_driver);
+ 
+diff --git a/src/audio/audio_system.cpp b/src/audio/audio_system.cpp
+index 7a711a8..1eef389 100644
+--- a/src/audio/audio_system.cpp
++++ b/src/audio/audio_system.cpp
+@@ -25,7 +25,7 @@
+ #include <rex/cvar.h>
+ 
+ REXCVAR_DEFINE_INT32(
+-    audio_maxqframes, 8, "Audio",
++    audio_maxqframes, 32, "Audio",
+     "Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering.");
+ 
+ // As with normal Microsoft, there are like twelve different ways to access
+@@ -129,8 +129,6 @@ void AudioSystem::WorkerThreadMain() {
+       continue;
+     }
+ 
+-    // Number of clients pumped
+-    bool pumped = false;
+     if (result.first == rex::thread::WaitResult::kSuccess) {
+       auto index = result.second;
+ 
+@@ -155,18 +153,11 @@ void AudioSystem::WorkerThreadMain() {
+       } else {
+         REXAPU_DEBUG("AudioWorker: semaphore signaled for client {} but callback is 0", index);
+       }
+-
+-      pumped = true;
+     }
+ 
+     if (!worker_running_) {
+       break;
+     }
+-
+-    if (!pumped) {
+-      SCOPE_profile_cpu_i("apu", "Sleep");
+-      rex::thread::Sleep(std::chrono::milliseconds(500));
+-    }
+   }
+   worker_running_ = false;
+ 
+diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
+index 20a2cd8..a6bf1be 100644
+--- a/src/audio/sdl/sdl_audio_driver.cpp
++++ b/src/audio/sdl/sdl_audio_driver.cpp
+@@ -182,6 +182,11 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+     static uint32_t sdl_callback_count = 0;
+     std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+     if (driver->frames_queued_.empty()) {
++      if (driver->playing_) {
++        driver->playing_ = false;
++        ++driver->underruns_;
++      }
++      if (driver->underruns_) ++driver->silent_buffers_;
+       if (sdl_callback_count < 10) {
+         REXAPU_DEBUG("SDLCallback: no frames queued (silence)");
+         sdl_callback_count++;
+@@ -193,6 +198,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+       }
+       additional_amount -= len;
+     } else {
++      driver->playing_ = true;
+       auto buffer = driver->frames_queued_.front();
+       driver->frames_queued_.pop();
+       if (REXCVAR_GET(audio_mute)) {
+@@ -224,6 +230,18 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+       additional_amount -= len;
+     }
+   }
++  const uint64_t now = SDL_GetTicks();
++  if (!driver->underrun_window_start_) driver->underrun_window_start_ = now;
++  if (now - driver->underrun_window_start_ >= 30000) {
++    if (driver->underruns_) {
++      REXAPU_INFO("audio underruns in last {} s: {} gaps, {:.0f} ms of silence",
++                  (now - driver->underrun_window_start_) / 1000, driver->underruns_,
++                  driver->silent_buffers_ * 1000.0 * channel_samples_ / frame_frequency_);
++    }
++    driver->underruns_ = 0;
++    driver->silent_buffers_ = 0;
++    driver->underrun_window_start_ = now;
++  }
+   SDL_stack_free(data);
+ }
+ 
+diff --git a/src/core/utf8.cpp b/src/core/utf8.cpp
+index 4fcfd7b..a9cc9f0 100644
+--- a/src/core/utf8.cpp
++++ b/src/core/utf8.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <cstdint>
++#include <iterator>
+ #include <locale>
+ #include <numeric>
+ #include <tuple>
+@@ -32,7 +33,12 @@ std::string to_utf8(const std::u16string_view source) {
+ }
+ 
+ std::u16string to_utf16(const std::string_view source) {
+-  return utfcpp::utf8to16(source);
++  if (utfcpp::is_valid(source.begin(), source.end())) {
++    return utfcpp::utf8to16(source);
++  }
++  std::string fixed;
++  utfcpp::replace_invalid(source.begin(), source.end(), std::back_inserter(fixed), '_');
++  return utfcpp::utf8to16(fixed);
+ }
+ 
+ std::string to_string(char32_t c) {
+diff --git a/src/ui/window.cpp b/src/ui/window.cpp
+index b4e045f..e3fd296 100644
+--- a/src/ui/window.cpp
++++ b/src/ui/window.cpp
+@@ -36,6 +36,10 @@ REXCVAR_DEFINE_INT32(window_height, 0, "UI/Window",
+ // in sync whenever this cvar is changed at runtime.
+ REXCVAR_DEFINE_BOOL(fullscreen, true, "UI/Window", "Start the window in fullscreen mode");
+ 
++REXCVAR_DEFINE_STRING(fullscreen_exclusive, "", "UI/Window",
++                      "Exclusive fullscreen display mode WxH (empty = borderless desktop)")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ REXCVAR_DEFINE_INT32(monitor, 0, "UI/Window",
+                      "Monitor index to display on (0 = default, 1 = primary, 2 = "
+                      "second monitor, etc.)")
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 2251429..513cfb4 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -44,6 +44,27 @@ namespace rex::ui {
+ 
+ namespace {
+ 
++void ApplyExclusiveMode(SDL_Window* window) {
++  int width = 0, height = 0;
++  const std::string mode = REXCVAR_GET(fullscreen_exclusive);
++  if (mode.empty() || std::sscanf(mode.c_str(), "%dx%d", &width, &height) != 2 || width <= 0 ||
++      height <= 0) {
++    SDL_SetWindowFullscreenMode(window, nullptr);
++    return;
++  }
++  SDL_DisplayMode closest;
++  SDL_DisplayID display = SDL_GetDisplayForWindow(window);
++  if (display && SDL_GetClosestFullscreenDisplayMode(display, width, height, 0.0f, false, &closest)) {
++    SDL_SetWindowFullscreenMode(window, &closest);
++    REXLOG_INFO("Exclusive fullscreen {}x{} @ {:.2f} Hz", closest.w, closest.h,
++                closest.refresh_rate);
++  } else {
++    REXLOG_WARN("No {}x{} display mode: {}; using borderless fullscreen", width, height,
++                SDL_GetError());
++    SDL_SetWindowFullscreenMode(window, nullptr);
++  }
++}
++
+ uint32_t ResolveWindowWidth(uint32_t requested_width) {
+   if (REXCVAR_GET(window_width) > 0) {
+     return uint32_t(REXCVAR_GET(window_width));
+@@ -172,6 +193,7 @@ bool WindowSDL::OpenImpl() {
+ 
+   if (IsFullscreen()) {
+     // Borderless desktop fullscreen (a NULL display mode is SDL3's default).
++    ApplyExclusiveMode(sdl_window_);
+     SDL_SetWindowFullscreen(sdl_window_, true);
+   }
+ #if REX_PLATFORM_MAC
+@@ -295,6 +317,7 @@ void WindowSDL::ApplyNewFullscreen() {
+   if (!sdl_window_) {
+     return;
+   }
++  if (IsFullscreen()) ApplyExclusiveMode(sdl_window_);
+   SDL_SetWindowFullscreen(sdl_window_, IsFullscreen());
+ }
+ 
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 5cfea05..77a3a25 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <forward_list>
+ 
+ #include <disruptorplus/multi_threaded_claim_strategy.hpp>
+@@ -21,6 +22,10 @@
+ #include <rex/thread.h>
+ #include <rex/thread/timer_queue.h>
+ 
++#if REX_PLATFORM_WIN32
++#include "platform_win.h"
++#endif
++
+ namespace dp = disruptorplus;
+ 
+ namespace rex::thread {
+@@ -39,6 +44,12 @@ class TimerQueue {
+         claim_strategy_(kWaitCount, wait_strategy_),
+         consumed_(wait_strategy_) {
+     claim_strategy_.add_claim_barrier(consumed_);
++#if REX_PLATFORM_WIN32
++    wake_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
++    wait_timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
++                                         TIMER_ALL_ACCESS);
++    if (!wait_timer_) wait_timer_ = CreateWaitableTimerW(nullptr, FALSE, nullptr);
++#endif
+     dispatch_thread_ =
+         std::jthread([this](std::stop_token stop_token) { TimerThreadMain(stop_token); });
+   }
+@@ -55,6 +66,25 @@ class TimerQueue {
+     // std::jthread auto-joins on destruction
+   }
+ 
++#if REX_PLATFORM_WIN32
++  void SleepUntil(clock::time_point due) {
++    auto now = clock::now();
++    if (due <= now) return;
++    if (due == clock::time_point::max() || !wait_timer_) {
++      WaitForSingleObject(wake_event_, due == clock::time_point::max() ? INFINITE : 1);
++      return;
++    }
++    LARGE_INTEGER relative;
++    relative.QuadPart =
++        -std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(due - now)
++                                      .count() /
++                                  100);
++    SetWaitableTimer(wait_timer_, &relative, 0, nullptr, nullptr, FALSE);
++    HANDLE handles[2] = {wake_event_, wait_timer_};
++    WaitForMultipleObjects(2, handles, FALSE, INFINITE);
++  }
++#endif
++
+   void TimerThreadMain(std::stop_token stop_token) {
+     dp::sequence_t next_sequence = 0;
+     const auto comp = [](const std::shared_ptr<WaitItem>& left,
+@@ -67,9 +97,20 @@ class TimerQueue {
+     while (!stop_token.stop_requested()) {
+       {
+         // Consume new wait items and add them to sorted wait queue
++#if REX_PLATFORM_WIN32
++        if (!queued_.load(std::memory_order_acquire)) {
++          SleepUntil(wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
++        }
++        dp::sequence_t available = next_sequence - 1;
++        if (queued_.exchange(false, std::memory_order_acq_rel)) {
++          available = claim_strategy_.wait_until_published(next_sequence, next_sequence - 1,
++                                                           clock::time_point::min());
++        }
++#else
+         dp::sequence_t available = claim_strategy_.wait_until_published(
+             next_sequence, next_sequence - 1,
+             wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
++#endif
+ 
+         // Check for timeout
+         if (available != next_sequence - 1) {
+@@ -132,6 +173,10 @@ class TimerQueue {
+     auto sequence = claim_strategy_.claim_one();
+     buffer_[sequence] = std::move(wait_item);
+     claim_strategy_.publish(sequence);
++#if REX_PLATFORM_WIN32
++    queued_.store(true, std::memory_order_release);
++    SetEvent(wake_event_);
++#endif
+ 
+     return wait_item_weak;
+   }
+@@ -149,6 +194,11 @@ class TimerQueue {
+   // This is a _sorted_ (ascending due_) list of active timers managed by a
+   // dedicated thread
+   std::forward_list<std::shared_ptr<WaitItem>> wait_queue_;
++#if REX_PLATFORM_WIN32
++  HANDLE wake_event_ = nullptr;
++  HANDLE wait_timer_ = nullptr;
++  std::atomic<bool> queued_{false};
++#endif
+   std::jthread dispatch_thread_;
+ };
+ 
+diff --git a/src/system/xthread.cpp b/src/system/xthread.cpp
+index 77bce25..5897874 100644
+--- a/src/system/xthread.cpp
++++ b/src/system/xthread.cpp
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cstring>
++#include <mutex>
+ 
+ #include <fmt/format.h>
+ 
+@@ -899,7 +900,8 @@ void XThread::SetActiveCpu(uint8_t cpu_index) {
+       thread_->set_affinity_mask(uint64_t(1) << cpu_index);
+     }
+   } else {
+-    REXSYS_WARN("Too few processor cores - scheduling will be wonky");
++    static std::once_flag warned;
++    std::call_once(warned, [] { REXSYS_WARN("Too few processor cores - scheduling will be wonky"); });
+   }
+ }
+ 

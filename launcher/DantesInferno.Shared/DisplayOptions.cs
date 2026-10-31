@@ -310,6 +310,9 @@ namespace DantesInferno
                     ? FormatResolution(width, height)
                     : NativeResolution(display);
                 args.Add("--dante_resolution=" + resolution);
+                if (config.Fullscreen && TryParseResolution(resolution, out width, out height) &&
+                    (width > display.DetectedWidth || height > display.DetectedHeight))
+                    args.Add("--fullscreen_exclusive=" + resolution);
                 args.Add(config.Smaa ? "--dante_smaa=true" : "--dante_smaa=false");
                 args.Add(string.Format(CultureInfo.InvariantCulture, "--dante_shadow_scale={0}",
                     NormalizeShadowScale(config.ShadowScale)));

@@ -45,9 +45,15 @@ namespace DantesInferno
             return Path.Combine(installDirectory, "dlc");
         }
 
-        public static string GetTitleUpdatePath(string installDirectory)
+        public static string GetTitleUpdatePath(string gameDataDirectory)
         {
-            return Path.Combine(installDirectory, "game", "default.xexp");
+            return Path.Combine(gameDataDirectory, "default.xexp");
+        }
+
+        // Outside game\, so replacing the game files never loses it.
+        public static string GetBundledTitleUpdatePath(string installDirectory)
+        {
+            return Path.Combine(installDirectory, "tu", "default.xexp");
         }
 
         // portable.txt next to the game keeps saves and the cache in userdata\

@@ -1,0 +1,5 @@
+PySide6>=6.7
+pillow>=10
+texture2ddecoder>=1.0.4
+xxhash>=3.4
+numpy>=1.26

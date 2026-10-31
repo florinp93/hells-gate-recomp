@@ -1,4 +1,5 @@
 #include "user_paths.h"
+#include "path_util.h"
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -67,14 +68,15 @@ void Report(const std::filesystem::path& user_data_root) {
   switch (g_choice) {
     case Choice::kPortable:
       REXLOG_INFO("PATHS: portable mode ({} next to the exe): saves and cache in {}",
-                  kPortableMarker, user_data_root.string());
+                  kPortableMarker, path_util::Utf8(user_data_root));
       return;
     case Choice::kDocumentsBlocked:
       REXLOG_WARN("PATHS: {} is not writable (Windows Controlled Folder Access?); saves and "
                   "cache in {}",
-                  g_blocked_documents.string(), user_data_root.string());
+                  path_util::Utf8(g_blocked_documents), path_util::Utf8(user_data_root));
       break;
     default:
+      REXLOG_INFO("PATHS: saves and cache in {}", path_util::Utf8(user_data_root));
       return;
   }
 #ifdef _WIN32

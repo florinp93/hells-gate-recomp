@@ -1,4 +1,5 @@
 #include "png_dump.h"
+#include "path_util.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/DeviceContext.h"
@@ -140,7 +141,7 @@ bool DumpTexturePng(dl::IRenderDevice* device, dl::IDeviceContext* context, dl::
   }
   context->UnmapTextureSubresource(staging, 0, 0);
   if (!known) {
-    REXLOG_INFO("NATIVE-DUMP skipped {} (format {})", path.filename().string(), int(src.Format));
+    REXLOG_INFO("NATIVE-DUMP skipped {} (format {})", path_util::Utf8(path.filename()), int(src.Format));
     return false;
   }
 
@@ -169,8 +170,8 @@ bool DumpTexturePng(dl::IRenderDevice* device, dl::IDeviceContext* context, dl::
   }
   std::error_code ec;
   std::filesystem::create_directories(path.parent_path(), ec);
-  bool ok = stbi_write_png(path.string().c_str(), int(w), int(h), 4, png.data(), int(w) * 4) != 0;
-  REXLOG_INFO("NATIVE-DUMP {} {}x{} fmt={} range={:.4f}..{:.4f} {}", path.filename().string(), w, h,
+  bool ok = stbi_write_png(path_util::Utf8(path).c_str(), int(w), int(h), 4, png.data(), int(w) * 4) != 0;
+  REXLOG_INFO("NATIVE-DUMP {} {}x{} fmt={} range={:.4f}..{:.4f} {}", path_util::Utf8(path.filename()), w, h,
               int(src.Format), lo, hi, ok ? "written" : "FAILED");
   return ok;
 }

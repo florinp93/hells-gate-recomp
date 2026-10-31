@@ -20,7 +20,18 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_set>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <fmt/format.h>
 
@@ -338,6 +349,42 @@ REX_HOOK_RAW(sub_827D3F10) {
   renderer::RecordSegmentSwitch(old_ptr, ctx.r3.u32);
   renderer::AfterCommandBufferReserve(ctx.r3.u32);
 }
+namespace {
+
+void PauseFenceSpin(bool waiting) {
+  thread_local uint32_t streak = 0;
+  if (!waiting) {
+    streak = 0;
+    return;
+  }
+  if (++streak < 32) {
+    std::this_thread::yield();
+    return;
+  }
+#if defined(_WIN32)
+  thread_local HANDLE timer =
+      CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                             TIMER_ALL_ACCESS);
+  if (timer) {
+    LARGE_INTEGER due;
+    due.QuadPart = -2500;
+    if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+      WaitForSingleObject(timer, INFINITE);
+      return;
+    }
+  }
+#endif
+  std::this_thread::sleep_for(std::chrono::microseconds(250));
+}
+
+}  // namespace
+
+REX_EXTERN(__imp__sub_827D5650);
+REX_HOOK_RAW(sub_827D5650) {
+  __imp__sub_827D5650(ctx, base);
+  PauseFenceSpin(ctx.r3.u32 != 0);
+}
+
 REX_EXTERN(__imp__sub_827D4148);
 REX_HOOK_RAW(sub_827D4148) {
   __imp__sub_827D4148(ctx, base);

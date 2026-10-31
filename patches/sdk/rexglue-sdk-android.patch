@@ -1325,7 +1325,7 @@ index 0000000..303649b
 +}  // namespace ui
 +}  // namespace rex
 diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
-index 2251429..a7fafe9 100644
+index 513cfb4..ef911b7 100644
 --- a/src/ui/window_sdl.cpp
 +++ b/src/ui/window_sdl.cpp
 @@ -35,6 +35,8 @@
@@ -1337,7 +1337,7 @@ index 2251429..a7fafe9 100644
  #else
  #include <X11/Xlib-xcb.h>
  #include <rex/ui/surface_gnulinux.h>
-@@ -398,6 +400,15 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
+@@ -421,6 +423,15 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
        SDL_Metal_DestroyView(metal_view);
      }
    }
@@ -1353,7 +1353,7 @@ index 2251429..a7fafe9 100644
  #else
    SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window_);
    if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
-@@ -490,6 +501,7 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
+@@ -513,6 +524,7 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
        OnRestored(destruction_receiver);
        break;
      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:

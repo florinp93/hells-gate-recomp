@@ -25,36 +25,21 @@ $sourceVersionFile = Join-Path $root "DantesInfernoLauncher\version.txt"
 $issFile = Join-Path $root "installer.iss"
 
 if (-not $Version) {
-    if (Test-Path $sourceVersionFile) {
-        $Version = (Get-Content $sourceVersionFile -Raw).Trim()
-    }
-    if (-not $Version) {
-        $Version = "0.0.0"
-    }
-    Write-Host "Using version from version.txt: $Version"
-} else {
-    Write-Host "Updating version to: $Version"
+    $Version = (Get-Content $sourceVersionFile -Raw).Trim()
 }
+Write-Host "Version: $Version"
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($sourceVersionFile, $Version + "`r`n", $utf8NoBom)
 
-if (Test-Path $issFile) {
-    $issContent = [System.IO.File]::ReadAllText($issFile, [System.Text.Encoding]::UTF8)
-    $issContent = [System.Text.RegularExpressions.Regex]::Replace(
-        $issContent,
-        '#define MyAppVersion\s+"[^"]*"',
-        "#define MyAppVersion ""$Version""")
-    [System.IO.File]::WriteAllText($issFile, $issContent, $utf8NoBom)
-    Write-Host "Updated installer.iss MyAppVersion -> $Version"
-}
+$issContent = [System.IO.File]::ReadAllText($issFile, [System.Text.Encoding]::UTF8)
+$issContent = [System.Text.RegularExpressions.Regex]::Replace(
+    $issContent, '#define MyAppVersion\s+"[^"]*"', "#define MyAppVersion ""$Version""")
+[System.IO.File]::WriteAllText($issFile, $issContent, $utf8NoBom)
 
 $gameFiles = @("dantes_inferno.exe", "rexruntime.dll", "rexgpu-xenos.dll", "amd_fidelityfx_dx12.dll")
 foreach ($f in $gameFiles) {
-    $src = Join-Path $GameBuildDir $f
-    if (-not (Test-Path $src)) {
-        Write-Error "Missing game binary: $src"
-    }
+    if (-not (Test-Path (Join-Path $GameBuildDir $f))) { Write-Error "Missing game binary: $f in $GameBuildDir" }
 }
 
 # Releases never carry the development cheats (CMake DANTESINFERNO_DEV_CHEATS).
@@ -64,19 +49,13 @@ if ($exeText.Contains("dante_cheat_god")) {
 }
 
 $ffxVkDll = Join-Path $GameBuildDir "thirdparty\rexglue-sdk\out\win-amd64\amd_fidelityfx_vk.dll"
-if (Test-Path $ffxVkDll) {
-    Write-Host "Found amd_fidelityfx_vk.dll at $ffxVkDll"
-} else {
-    Write-Host "amd_fidelityfx_vk.dll not built; installer will skip it (not required for Vulkan CAS/FSR shaders)"
-}
 
 $tuSrc = Join-Path $root "..\game\default.xexp"
 $tuDst = Join-Path $GameBuildDir "default.xexp"
 if (Test-Path $tuSrc) {
     Copy-Item $tuSrc $tuDst -Force
-    Write-Host "Copied default.xexp (TU2 patch) to build output"
-} else {
-    Write-Warning "default.xexp not found at $tuSrc - TU2 will not be bundled with the installer."
+} elseif (-not (Test-Path $tuDst)) {
+    Write-Error "default.xexp (TU2) not found at $tuSrc or in $GameBuildDir - the game cannot start without it."
 }
 
 $extractXiso = Join-Path $root "..\tools\extract-xiso\extract-xiso.exe"
@@ -89,18 +68,7 @@ Write-Host "Building C# solution..."
 if ($LASTEXITCODE -ne 0) { throw "C# build failed." }
 
 $binVersionFile = Join-Path $root "DantesInfernoLauncher\bin\$Configuration\version.txt"
-if (Test-Path $binVersionFile) {
-    $binVersion = (Get-Content $binVersionFile -Raw).Trim()
-    if ($binVersion -ne $Version) {
-        Write-Warning "version.txt in bin output ($binVersion) does not match expected ($Version) - overwriting."
-        [System.IO.File]::WriteAllText($binVersionFile, $Version + "`r`n", $utf8NoBom)
-    } else {
-        Write-Host "version.txt in build output verified: $binVersion"
-    }
-} else {
-    Write-Warning "version.txt not found in launcher bin - creating with version $Version."
-    [System.IO.File]::WriteAllText($binVersionFile, $Version + "`r`n", $utf8NoBom)
-}
+[System.IO.File]::WriteAllText($binVersionFile, $Version + "`r`n", $utf8NoBom)
 
 if (Test-Path $OutputDir) { Remove-Item $OutputDir -Recurse -Force }
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -122,7 +90,9 @@ foreach ($f in @("DantesInfernoLauncher.exe", "DantesInferno.Shared.dll", "versi
     Copy-Item (Join-Path $launcherBin $f) $staging
 }
 Copy-Item (Join-Path $root "icon.ico"), (Join-Path $root "banner.jpg"), $extractXiso $staging
-if (Test-Path $tuDst) { Copy-Item $tuDst (Join-Path $staging "game") }
+New-Item -ItemType Directory -Path (Join-Path $staging "tu") -Force | Out-Null
+Copy-Item $tuDst (Join-Path $staging "game")
+Copy-Item $tuDst (Join-Path $staging "tu")
 $shaderList = Join-Path $root "..\shader-list\dante_pipelines.bin"
 if (Test-Path $shaderList) {
     Copy-Item $shaderList $staging
@@ -152,12 +122,5 @@ foreach ($f in @("dantes_inferno.exe", "dantes_inferno.pdb")) {
 }
 Write-Host "Symbols archived in: $symbolsDir"
 
-Write-Host ""
-Write-Host "Installer created at: $OutputDir\DantesInfernoInstaller.exe"
 $installerExe = Join-Path $OutputDir "DantesInfernoInstaller.exe"
-if (Test-Path $installerExe) {
-    $size = (Get-Item $installerExe).Length
-    $sizeMB = [math]::Round($size / 1048576, 2)
-    Write-Host "Size: $sizeMB MB"
-    Write-Host "Version: $Version"
-}
+Write-Host ("Installer: {0} ({1:N1} MB)" -f $installerExe, ((Get-Item $installerExe).Length / 1MB))

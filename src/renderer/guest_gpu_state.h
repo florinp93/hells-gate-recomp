@@ -53,6 +53,12 @@ constexpr int GuestRegisterIndex(uint32_t reg) {
   return -1;
 }
 
+inline constexpr int kFloatConstantIndex = GuestRegisterIndex(0x4000);
+static_assert(GuestRegisterIndex(0x4400) == kFloatConstantIndex + 1024);
+constexpr int FloatConstantIndex(uint32_t n) {
+  return n < 2048 ? kFloatConstantIndex + int(n) : GuestRegisterIndex(0x4000 + n);
+}
+
 // D3D device offsets of the bound objects.
 inline constexpr uint32_t kDevCommandBufferWritePtr = 48;  // last dword written
 inline constexpr uint32_t kDevVertexDecl = 11992;

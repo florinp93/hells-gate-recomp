@@ -41,6 +41,7 @@ set(DANTESINFERNO_SOURCES
     src/main.cpp
     src/damage_hooks.cpp
     src/frame_rate_hooks.cpp
+    src/memory_hooks.cpp
     src/timer_resolution.cpp
     src/user_paths.cpp
     src/overlay/achievement_sound.cpp
@@ -137,6 +138,8 @@ if(DANTESINFERNO_NATIVE_RENDERER)
         src/renderer/shader_cache.cpp
         src/renderer/smaa_pass.cpp
         src/renderer/texture_cache.cpp
+        src/renderer/mod_loader.cpp
+        src/renderer/thread_cpu.cpp
         src/renderer/renderer_config.cpp
         src/renderer/ui_overlay.cpp
         src/renderer/vulkan_device.cpp

@@ -27,6 +27,7 @@
 #include <cstring>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace renderer {
@@ -154,12 +155,47 @@ struct GuestTextureEntry {
   dl::RefCntAutoPtr<dl::ITexture> texture;
   uint64_t content_hash = 0;
   uint64_t checked_frame = UINT64_MAX;
+  uint64_t bytes = 0;
 };
+
+constexpr uint64_t kUnusedFrames = 1800;
 
 // Cheap change detection: the first 64 bytes of every 4 KB page.
 void HashSamples(XXH3_state_t& state, const uint8_t* data, uint32_t size) {
   for (uint32_t offset = 0; offset < size; offset += 4096) {
     XXH3_64bits_update(&state, data + offset, std::min<uint32_t>(64, size - offset));
+  }
+}
+
+inline void SwapBlock(xenos::Endian endian, uint8_t* dst, const uint8_t* src, uint32_t bytes) {
+  switch (endian) {
+    case xenos::Endian::k8in16:
+      for (uint32_t i = 0; i < bytes; i += 2) {
+        uint16_t v;
+        std::memcpy(&v, src + i, 2);
+        v = __builtin_bswap16(v);
+        std::memcpy(dst + i, &v, 2);
+      }
+      break;
+    case xenos::Endian::k8in32:
+      for (uint32_t i = 0; i < bytes; i += 4) {
+        uint32_t v;
+        std::memcpy(&v, src + i, 4);
+        v = __builtin_bswap32(v);
+        std::memcpy(dst + i, &v, 4);
+      }
+      break;
+    case xenos::Endian::k16in32:
+      for (uint32_t i = 0; i < bytes; i += 4) {
+        uint32_t v;
+        std::memcpy(&v, src + i, 4);
+        v = (v >> 16) | (v << 16);
+        std::memcpy(dst + i, &v, 4);
+      }
+      break;
+    default:
+      std::memcpy(dst, src, bytes);
+      break;
   }
 }
 
@@ -189,6 +225,33 @@ struct TextureCache::Impl {
   std::vector<uint8_t> staging;
   uint32_t uploads = 0, resolved_hits = 0, unsupported = 0;
   uint64_t uploaded_bytes = 0;
+  uint64_t last_frame = 0;
+  uint64_t evicted = 0;
+
+  void Evict(uint64_t frame, uint64_t unused_frames) {
+    std::unordered_set<dl::ITexture*> gone;
+    for (auto it = textures.begin(); it != textures.end();) {
+      const GuestTextureEntry& e = it->second;
+      if (e.checked_frame != frame &&
+          (e.checked_frame == UINT64_MAX || e.checked_frame + unused_frames <= frame)) {
+        if (e.texture) gone.insert(e.texture.RawPtr());
+        it = textures.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    if (gone.empty()) return;
+    for (auto it = views.begin(); it != views.end();) {
+      it = gone.count(it->second->GetTexture()) ? views.erase(it) : std::next(it);
+    }
+    evicted += gone.size();
+  }
+
+  void BeginUse(uint64_t frame) {
+    if (frame == last_frame) return;
+    last_frame = frame;
+    if (frame % 60 == 0) Evict(frame, kUnusedFrames);
+  }
 
   // format: view format for typeless textures (UNKNOWN = the texture's own).
   dl::ITextureView* View(dl::ITexture* texture, uint32_t swizzle,
@@ -284,7 +347,18 @@ struct TextureCache::Impl {
         }
         uint32_t pitch_bytes = storage.row_pitch_bytes;
         uint8_t* dst = out.data.data() + offsets[index];
+        auto endian = xenos::Endian(fetch.endianness);
         for (uint32_t y = 0; y < blocks_y; ++y) {
+          if (!fetch.tiled) {
+            uint32_t row = address + (y + oy) * pitch_bytes + ox * bpb;
+            uint32_t row_bytes = blocks_x * bpb;
+            if (row < guest::kPhysicalMemorySize &&
+                guest::kPhysicalMemorySize - row >= row_bytes) {
+              rg::texture_conversion::CopySwapBlock(endian, dst + size_t(y) * row_bytes,
+                                                    guest::PhysicalPtr(base, row), row_bytes);
+              continue;
+            }
+          }
           for (uint32_t x = 0; x < blocks_x; ++x) {
             uint32_t in = fetch.tiled
                               ? uint32_t(rg::texture_util::GetTiledOffset2D(
@@ -293,9 +367,8 @@ struct TextureCache::Impl {
             uint32_t source = address + in;
             if (source >= guest::kPhysicalMemorySize || guest::kPhysicalMemorySize - source < bpb)
               continue;
-            rg::texture_conversion::CopySwapBlock(xenos::Endian(fetch.endianness),
-                                                  dst + (size_t(y) * blocks_x + x) * bpb,
-                                                  guest::PhysicalPtr(base, source), bpb);
+            SwapBlock(endian, dst + (size_t(y) * blocks_x + x) * bpb,
+                      guest::PhysicalPtr(base, source), bpb);
           }
         }
         out.subresources.push_back(dl::TextureSubResData{dst, uint64_t(blocks_x) * bpb});
@@ -321,7 +394,12 @@ struct TextureCache::Impl {
       dl::TextureData data{const_cast<dl::TextureSubResData*>(levels.subresources.data()),
                            uint32_t(levels.subresources.size())};
       device->CreateTexture(desc, &data, &entry.texture);
+      if (!entry.texture) {
+        Evict(last_frame, 1);
+        device->CreateTexture(desc, &data, &entry.texture);
+      }
       if (!entry.texture) return false;
+      entry.bytes = levels.data.size();
     } else {
       size_t index = 0;
       for (uint32_t slice = 0; slice < levels.array_size; ++slice) {
@@ -402,6 +480,7 @@ dl::ITextureView* TextureCache::GetView2D(const uint32_t fetch_dwords[6], const 
                           fetch_dwords[5],
                           (uint32_t(fetch.mip_min_level) << 4) | uint32_t(fetch.mip_max_level)};
   uint64_t key = XXH3_64bits(identity, sizeof(identity));
+  m.BeginUse(frame);
   GuestTextureEntry& entry = m.textures[key];
   src_kind = 'U';
   if (is_signed && host.snorm == dl::TEX_FORMAT_UNKNOWN) {
@@ -472,6 +551,7 @@ dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], cons
 
   // Cube and 3D keys: the whole fetch constant, xored apart from each other.
   uint64_t key = XXH3_64bits(fetch_dwords, 6 * sizeof(uint32_t)) ^ 0xC0BEC0BEull;
+  m.BeginUse(frame);
   GuestTextureEntry& entry = m.textures[key];
   src_kind = 'U';
   if (is_signed && host.snorm == dl::TEX_FORMAT_UNKNOWN) {
@@ -539,6 +619,7 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
   uint32_t swizzle = ComposeSwizzle(fetch.swizzle, info.format);
 
   uint64_t key = XXH3_64bits(fetch_dwords, 6 * sizeof(uint32_t)) ^ 0x3D3D3D3Dull;
+  m.BeginUse(frame);
   GuestTextureEntry& entry = m.textures[key];
   src_kind = 'U';
   if (is_signed && host.snorm == dl::TEX_FORMAT_UNKNOWN) {
@@ -592,6 +673,7 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
       m.textures.erase(key);
       return nullptr;
     }
+    entry.bytes = m.staging.size();
     REXLOG_INFO("NATIVE-TEX 3D texture {:08X} {}x{}x{} fmt={} tiled={}", address, width, height,
                 depth, uint32_t(info.format), info.is_tiled);
   } else {
@@ -669,11 +751,14 @@ dl::ISampler* TextureCache::GetSampler(const uint32_t fetch_dwords[6], uint32_t 
 }
 
 void TextureCache::LogStats() {
+  uint64_t bytes = 0;
+  for (const auto& [key, entry] : impl_->textures) bytes += entry.bytes;
   REXLOG_INFO(
-      "NATIVE-TEX textures={} uploads={} uploaded={} KB resolved_hits={} unsupported={} "
-      "views={} samplers={}",
-      impl_->textures.size(), impl_->uploads, impl_->uploaded_bytes / 1024, impl_->resolved_hits,
-      impl_->unsupported, impl_->views.size(), impl_->samplers.size());
+      "NATIVE-TEX textures={} ({} MB) evicted={} uploads={} uploaded={} KB resolved_hits={} "
+      "unsupported={} views={} samplers={}",
+      impl_->textures.size(), bytes >> 20, impl_->evicted, impl_->uploads,
+      impl_->uploaded_bytes / 1024, impl_->resolved_hits, impl_->unsupported,
+      impl_->views.size(), impl_->samplers.size());
 }
 
 }  // namespace renderer

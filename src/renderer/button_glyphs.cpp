@@ -773,7 +773,6 @@ void KeyPlate(Image& img, const int box[4], const int letters[4], const KeyLabel
   DrawLabel(cell, label, text_box, icon_box, kInk);
 }
 
-// White outlined letters in a w x h cell, replaced by label.
 // White letters in a cell (bright, unsaturated, opaque pixels) and the box of
 // the rows and columns holding at least two of them. False if there are none.
 bool FindWhiteLetters(Cell& cell, std::vector<bool>& letters, float box[4]) {
@@ -811,6 +810,7 @@ bool FindWhiteLetters(Cell& cell, std::vector<bool>& letters, float box[4]) {
   return box[2] >= 0 && box[3] >= 0;
 }
 
+// White outlined letters in a w x h cell, replaced by label.
 void WhiteLabel(Image& img, int x0, int y0, int w, int h, const KeyLabel& label) {
   Cell cell{img, x0, y0, w, h};
   std::vector<bool> letters;
@@ -1592,6 +1592,7 @@ std::vector<Edit> FindGlyphs(const Image& img, uint64_t content_hash) {
     Edit edit;
     if (FindSphere(img, c, edit) || FindPlate(img, c, edit)) edits.push_back(edit);
   }
+  if (edits.size() == 1 && edits[0].kind == Edit::Kind::kSphere) edits.clear();
   return edits;
 }
 

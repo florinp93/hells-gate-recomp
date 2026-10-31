@@ -21,7 +21,6 @@ generated/*/*.cpp
 generated/*/*.h
 generated/*/*.hpp
 !generated/rexglue.cmake
-!generated/.gitkeep
 
 # --- ReXGlue SDK (cloned via setup script, not tracked here) ---
 thirdparty/rexglue-sdk/
@@ -98,11 +97,6 @@ tester-release/
 # Recorded shader/pipeline list (contains game shader microcode): shipped, never committed.
 shader-list/
 release-symbols/
-
-# --- Source icon assets (keep ICO, ignore PNG source) ---
-!launcher/icon.ico
-!metadata/icon.ico
-metadata/icon.png
 
 # --- Third-party reference source (optional, not needed for runtime) ---
 tools/Gibbed.Visceral/

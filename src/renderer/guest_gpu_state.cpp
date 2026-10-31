@@ -2,6 +2,8 @@
 
 #include <rex/ppc/context.h>
 
+#include <cstring>
+
 namespace renderer {
 
 using namespace guest;
@@ -46,7 +48,7 @@ uint32_t ApplyShaderLiterals(const uint8_t* base, uint32_t blk, uint32_t ucode_b
         g_stale_literals[vec4].valid = true;
         g_stale_literals[vec4].value[d & 3] = value;
       }
-      int index = GuestRegisterIndex(0x4000 + vec4_index * 4 + d);
+      int index = FloatConstantIndex(vec4_index * 4 + d);
       if (index < 0) continue;
       state[index] = value;
       ++applied;
@@ -88,27 +90,21 @@ DrawStateStats CaptureDrawState(uint32_t device, const uint8_t* base, GuestRegis
   DrawStateStats stats;
   uint32_t index = 0;
   for (const auto& range : kShadowRanges) {
-    for (uint32_t i = 0; i < range.count; ++i) {
-      out[index++] = Load32(base, device + range.offset + i * 4);
-    }
+    std::memcpy(&out[index], Ptr(base, device + range.offset), range.count * 4);
+    for (uint32_t i = 0; i < range.count; ++i, ++index) out[index] = __builtin_bswap32(out[index]);
   }
   for (uint32_t vec4 = 0; vec4 < 512; ++vec4) {
     const StaleLiteral& stale = g_stale_literals[vec4];
     if (!stale.valid) continue;
-    for (uint32_t c = 0; c < 4; ++c) {
-      int state_index = GuestRegisterIndex(0x4000 + vec4 * 4 + c);
-      if (state_index >= 0) out[state_index] = stale.value[c];
-    }
+    std::memcpy(&out[kFloatConstantIndex + vec4 * 4], stale.value, sizeof(stale.value));
   }
   for (uint32_t vec4 = 0; vec4 < 512; ++vec4) {
     uint32_t source = g_constant_source[vec4];
     if (!source) continue;
     for (uint32_t c = 0; c < 4; ++c) {
-      int state_index = GuestRegisterIndex(0x4000 + vec4 * 4 + c);
-      if (state_index < 0) continue;
-      out[state_index] = Load32(base, source + c * 4);
-      ++stats.buffer_constant_dwords;
+      out[kFloatConstantIndex + vec4 * 4 + c] = Load32(base, source + c * 4);
     }
+    stats.buffer_constant_dwords += 4;
   }
   uint32_t vs = Load32(base, device + kDevVertexShader);
   uint32_t ps = Load32(base, device + kDevPixelShader);

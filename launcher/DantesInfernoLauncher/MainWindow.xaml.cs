@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace DantesInferno.Launcher
@@ -40,6 +41,14 @@ namespace DantesInferno.Launcher
             RefreshPlayStatus();
             RefreshDlcStatus();
             CheckForUpdatesOnStartup();
+            RefreshSettingsSummary();
+            Closing += (s, e) => AutoSave();
+            ContentRendered += (s, e) =>
+            {
+                string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
+                if (!File.Exists(Path.Combine(gameData, "default.xex")))
+                    OfferIsoImport(gameData);
+            };
         }
 
         private void CheckForUpdatesOnStartup()
@@ -120,10 +129,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateControls()
         {
-            var version = GitHubUpdater.GetLocalVersion(_installDir);
-            VersionText.Text = "Version: " + version.ToString();
-            UpdateVersionText.Text = "Installed version: " + version.ToString();
-
             if (_displayAspect == null)
                 _displayAspect = DisplayOptions.DetectPrimaryAspect();
 
@@ -134,8 +139,7 @@ namespace DantesInferno.Launcher
 
             _resolutionOptions = DisplayOptions.BuildResolutionOptions(_displayAspect);
             ResolutionCombo.ItemsSource = _resolutionOptions;
-            int width, height;
-            ResolutionCombo.Text = DisplayOptions.TryParseResolution(_config.RenderResolution, out width, out height)
+            ResolutionCombo.Text = DisplayOptions.TryParseResolution(_config.RenderResolution, out int width, out int height)
                 ? DisplayOptions.FormatResolution(width, height)
                 : DisplayOptions.NativeResolution(_displayAspect);
 
@@ -175,7 +179,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateShadowCombo(int selected)
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
             var items = new List<KeyValuePair<int, string>>
             {
                 new KeyValuePair<int, string>(1, Lt(LauncherLocalizer.ShadowOriginal)),
@@ -190,7 +193,6 @@ namespace DantesInferno.Launcher
 
         private void PopulateGlyphCombo(string selected)
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
             var items = new List<KeyValuePair<string, string>>
             {
                 new KeyValuePair<string, string>("auto", Lt(LauncherLocalizer.GlyphAuto)),
@@ -241,9 +243,6 @@ namespace DantesInferno.Launcher
 
         private void ApplyLocalization()
         {
-            string Lt(string key) => LauncherLocalizer.Get(_launcherLanguage, key);
-            string Lf(string key, params object[] args) => LauncherLocalizer.Get(_launcherLanguage, key, args);
-
             TabPlay.Header = Lt(LauncherLocalizer.TabPlay);
             TabDlc.Header = Lt(LauncherLocalizer.TabDlc);
             TabControls.Header = Lt(LauncherLocalizer.TabControls);
@@ -252,7 +251,10 @@ namespace DantesInferno.Launcher
 
             PlaySubtitleText.Text = Lt(LauncherLocalizer.PlaySubtitle);
             PlayButton.Content = Lt(LauncherLocalizer.PlayButton);
-            ExitButton.Content = Lt(LauncherLocalizer.ExitButton);
+            ExitButton.ToolTip = Lt(LauncherLocalizer.ExitButton);
+            ChangeSettingsText.Text = Lt(LauncherLocalizer.ChangeSettings);
+            DropDlcTitleText.Text = Lt(LauncherLocalizer.DropDlcTitle);
+            DropDlcHintText.Text = Lt(LauncherLocalizer.DropDlcHint);
             SupportButton.Content = Lt(LauncherLocalizer.SupportDeveloper);
             var version = GitHubUpdater.GetLocalVersion(_installDir);
             VersionText.Text = Lf(LauncherLocalizer.VersionLabel, version.ToString());
@@ -260,6 +262,7 @@ namespace DantesInferno.Launcher
             DlcTitleText.Text = Lt(LauncherLocalizer.DlcTitle);
             DlcDescriptionText.Text = Lt(LauncherLocalizer.DlcDescription);
             OpenDlcFolderButton.Content = Lt(LauncherLocalizer.OpenDlcFolder);
+            InstallDlcButton.Content = Lt(LauncherLocalizer.InstallDlc);
             OpenTuFolderButton.Content = Lt(LauncherLocalizer.OpenTuFolder);
             OpenTuFolderButton.ToolTip = Lt(LauncherLocalizer.TuFolderTooltip);
 
@@ -478,32 +481,9 @@ namespace DantesInferno.Launcher
 
         private void ResetKeybinds_Click(object sender, RoutedEventArgs e)
         {
-            _config.KeybindA = "Space";
-            _config.KeybindB = "F";
-            _config.KeybindX = "LMB";
-            _config.KeybindY = "E";
-            _config.KeybindLeftShoulder = "Q";
-            _config.KeybindRightShoulder = "RMB";
-            _config.KeybindLeftTrigger = "Shift";
-            _config.KeybindRightTrigger = "Ctrl";
-            _config.KeybindLStickUp = "W";
-            _config.KeybindLStickDown = "S";
-            _config.KeybindLStickLeft = "A";
-            _config.KeybindLStickRight = "D";
-            _config.KeybindLStickPress = "X";
-            _config.KeybindRStickUp = "Up";
-            _config.KeybindRStickDown = "Down";
-            _config.KeybindRStickLeft = "Left";
-            _config.KeybindRStickRight = "Right";
-            _config.KeybindRStickPress = "R";
-            _config.KeybindDpadUp = "Shift+Up";
-            _config.KeybindDpadDown = "Shift+Down";
-            _config.KeybindDpadLeft = "Shift+Left";
-            _config.KeybindDpadRight = "Shift+Right";
-            _config.KeybindBack = "Tab";
-            _config.KeybindStart = "Escape";
+            _config.ResetKeybinds();
             PopulateKeybinds();
-            MessageBox.Show("Default bindings restored. Click Save Bindings to keep them.", "Reset",
+            MessageBox.Show("Default bindings restored.", "Reset",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
@@ -520,9 +500,18 @@ namespace DantesInferno.Launcher
             string exePath = PathHelper.GetGameExecutablePath(_installDir);
             string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
             if (File.Exists(exePath) && File.Exists(Path.Combine(gameData, "default.xex")))
-                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusReady);
+            {
+                PlayStatusText.Text = Lt(LauncherLocalizer.PlayStatusReady);
+                string release = IsoChecker.InstalledRelease(gameData);
+                if (release != null)
+                    PlayStatusText.Text = PlayStatusText.Text.TrimEnd('.') + ": " + release;
+                StatusGameDot.Fill = (Brush)FindResource("SuccessBrush");
+            }
             else
-                PlayStatusText.Text = LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.PlayStatusMissing);
+            {
+                PlayStatusText.Text = Lt(LauncherLocalizer.PlayStatusMissing);
+                StatusGameDot.Fill = (Brush)FindResource("DangerBrush");
+            }
         }
 
         // Logs kept from earlier sessions; the session being started adds one.
@@ -550,8 +539,7 @@ namespace DantesInferno.Launcher
         // False (with a message) when the typed resolution is not WIDTHxHEIGHT.
         private bool SaveSettingsToConfig()
         {
-            int width, height;
-            if (!DisplayOptions.TryParseResolution(ResolutionCombo.Text, out width, out height))
+            if (!DisplayOptions.TryParseResolution(ResolutionCombo.Text, out int width, out int height))
             {
                 MessageBox.Show(string.Format(CultureInfo.InvariantCulture,
                         "'{0}' is not a resolution. Use WIDTHxHEIGHT, for example 2560x1440 ({1} to {2} pixels per side).",
@@ -660,8 +648,64 @@ namespace DantesInferno.Launcher
             if (dialog.ShowDialog(this) != true)
                 return;
             string iso = dialog.FileName;
-            string logPath = Path.Combine(gameData, "extract-xiso.log");
             PlayButton.IsEnabled = false;
+            PlayNoteText.Text = "Checking the ISO...";
+            Task.Factory.StartNew(() => IsoChecker.Check(iso)).ContinueWith(task =>
+            {
+                IsoCheckResult check = task.Exception == null ? task.Result : null;
+                if (check == null)
+                {
+                    check = new IsoCheckResult();
+                    check.Report.Add("ISO: " + iso);
+                    check.Problem = "The ISO could not be read: " + task.Exception.GetBaseException().Message;
+                    check.Report.Add("Problem: " + check.Problem);
+                }
+                WriteIsoReport(check, null);
+                if (!check.CanExtract)
+                {
+                    PlayButton.IsEnabled = true;
+                    PlayNoteText.Text = "";
+                    MessageBox.Show(check.Problem + "\n\nISO: " + iso, Lt(LauncherLocalizer.ImportIsoTitle),
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                if (!check.KnownRelease && MessageBox.Show(
+                        "This ISO is Dante's Inferno, " + check.Release + ".\n\nThe port is built and tested with the Europe (En, De, It) " +
+                        "release. Other releases should work with the bundled Title Update but are not tested.\n\nImport it?",
+                        Lt(LauncherLocalizer.ImportIsoTitle), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                {
+                    PlayButton.IsEnabled = true;
+                    PlayNoteText.Text = "";
+                    return;
+                }
+                ExtractIso(iso, gameData, check);
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        private void WriteIsoReport(IsoCheckResult check, List<string> extractionProblems)
+        {
+            try
+            {
+                string logsDir = PathHelper.GetLogsPath(_installDir);
+                Directory.CreateDirectory(logsDir);
+                var lines = new List<string> { "ISO check " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) };
+                lines.AddRange(check.Report);
+                if (extractionProblems != null)
+                {
+                    lines.Add(extractionProblems.Count == 0
+                        ? "Extracted files: all present with the right sizes"
+                        : "Extracted files with problems:");
+                    lines.AddRange(extractionProblems.Select(p => "  " + p));
+                }
+                File.WriteAllLines(Path.Combine(logsDir, "iso_check.log"), lines);
+            }
+            catch { }
+        }
+
+        private void ExtractIso(string iso, string gameData, IsoCheckResult check)
+        {
+            string tool = PathHelper.GetExtractXisoPath(_installDir);
+            string logPath = Path.Combine(PathHelper.GetLogsPath(_installDir), "extract-xiso.log");
             PlayNoteText.Text = Lt(LauncherLocalizer.ImportIsoRunning);
 
             Task.Factory.StartNew(new Action(() =>
@@ -706,20 +750,75 @@ namespace DantesInferno.Launcher
                     lock (output) File.WriteAllText(logPath, output.ToString());
                 }
                 catch { }
-                bool imported = File.Exists(Path.Combine(gameData, "default.xex"));
+                var problems = IsoChecker.VerifyExtracted(check, gameData);
+                check.Report.Add("extract-xiso exit code: " + exitCode);
+                WriteIsoReport(check, problems);
+                bool imported = problems.Count == 0;
                 Dispatcher.Invoke(new Action(() =>
                 {
+                    if (imported)
+                        EnsureTitleUpdate(gameData);
                     PlayButton.IsEnabled = true;
-                    PlayNoteText.Text = imported ? Lt(LauncherLocalizer.ImportIsoDone) : "";
+                    PlayNoteText.Text = imported ? Lt(LauncherLocalizer.ImportIsoDone) + " (" + check.Release + ")" : "";
                     if (!imported)
                     {
-                        MessageBox.Show(Lf(LauncherLocalizer.ImportIsoFailed, exitCode), Lt(LauncherLocalizer.ImportIsoTitle),
-                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        MessageBox.Show(Lf(LauncherLocalizer.ImportIsoFailed, exitCode) + "\n\n" +
+                            string.Join("\n", problems.Take(8)) +
+                            (problems.Count > 8 ? "\n..." : "") +
+                            "\n\nCheck the free space on the drive and that no antivirus blocked the files. " +
+                            "Details are in the logs folder (iso_check.log).",
+                            Lt(LauncherLocalizer.ImportIsoTitle), MessageBoxButton.OK, MessageBoxImage.Error);
                     }
                     PopulateLanguageCombo();
                     RefreshPlayStatus();
                 }));
             }));
+        }
+
+        // The recompiled code needs TU2; no other default.xexp matches it.
+        private bool EnsureTitleUpdate(string gameData)
+        {
+            string target = PathHelper.GetTitleUpdatePath(gameData);
+            string source = PathHelper.GetBundledTitleUpdatePath(_installDir);
+            if (!File.Exists(source))
+            {
+                // Installs from before tu\ only have the copy in game\.
+                string local = PathHelper.GetTitleUpdatePath(PathHelper.GetGameDataPath(_installDir));
+                source = File.Exists(local) ? local : null;
+            }
+            try
+            {
+                if (source != null && !SameFile(source, target))
+                    File.Copy(source, target, true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("The Title Update (default.xexp) could not be copied to the game data folder:\n" +
+                    gameData + "\n\n" + ex.Message, "Missing Title Update", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+            RefreshDlcStatus();
+            if (File.Exists(target))
+                return true;
+            MessageBox.Show("The Title Update (default.xexp) is missing from the game data folder:\n" + gameData +
+                "\n\nThe game cannot start without it. Download the release again; it is in the tu folder.",
+                "Missing Title Update", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+
+        private static bool SameFile(string a, string b)
+        {
+            if (string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (!File.Exists(b) || new FileInfo(a).Length != new FileInfo(b).Length)
+                return false;
+            using (var sha = System.Security.Cryptography.SHA1.Create())
+            {
+                byte[] ha, hb;
+                using (var s = File.OpenRead(a)) ha = sha.ComputeHash(s);
+                using (var s = File.OpenRead(b)) hb = sha.ComputeHash(s);
+                return ha.SequenceEqual(hb);
+            }
         }
 
         private void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -744,6 +843,9 @@ namespace DantesInferno.Launcher
                 return;
             }
 
+            if (!EnsureTitleUpdate(gameData))
+                return;
+
             if (!SaveSettingsToConfig())
                 return;
             SaveKeybindsToConfig();
@@ -763,28 +865,35 @@ namespace DantesInferno.Launcher
             Task.Factory.StartNew(new Action(() =>
             {
                 int exitCode = -1;
-                try
+                bool started = false;
+                var errors = new List<string>();
+                var attempts = new[]
                 {
-                    var psi = new ProcessStartInfo
+                    new ProcessStartInfo { FileName = exePath, Arguments = arguments, WorkingDirectory = _installDir, UseShellExecute = false },
+                    new ProcessStartInfo { FileName = exePath, Arguments = arguments, WorkingDirectory = _installDir, UseShellExecute = true },
+                    new ProcessStartInfo { FileName = Path.GetFileName(exePath), Arguments = arguments, WorkingDirectory = _installDir, UseShellExecute = true },
+                };
+                foreach (var psi in attempts)
+                {
+                    try
                     {
-                        FileName = exePath,
-                        Arguments = arguments,
-                        WorkingDirectory = _installDir,
-                        UseShellExecute = false,
-                    };
-
-                    using (var process = Process.Start(psi))
-                    {
-                        process.WaitForExit();
-                        exitCode = process.ExitCode;
+                        using (var process = Process.Start(psi))
+                        {
+                            if (process == null)
+                            {
+                                errors.Add("no process returned");
+                                continue;
+                            }
+                            started = true;
+                            process.WaitForExit();
+                            exitCode = process.ExitCode;
+                        }
+                        break;
                     }
-                }
-                catch (Exception ex)
-                {
-                    Dispatcher.Invoke(new Action(() =>
+                    catch (Exception ex)
                     {
-                        MessageBox.Show("Failed to start the game:\n" + ex.Message, "Launch Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }));
+                        errors.Add(ex.Message);
+                    }
                 }
 
                 Dispatcher.Invoke(new Action(() =>
@@ -792,27 +901,45 @@ namespace DantesInferno.Launcher
                     _gameRunning = false;
                     PlayButton.IsEnabled = true;
 
-                    if (exitCode != 0)
+                    if (!started)
+                        ShowLaunchFailed(exePath, arguments, errors);
+                    else if (exitCode != 0)
                         ShowCrashDialog(exitCode);
                 }));
             }));
+        }
+
+        private void ShowLaunchFailed(string exePath, string arguments, List<string> errors)
+        {
+            string message = "The launcher could not start the game:\n" + string.Join("\n", errors.Distinct()) +
+                "\n\nThis happens on Linux / Steam Deck (Proton), which is not officially supported yet. " +
+                "You can start dantes_inferno.exe directly with the launcher's settings instead: add it to Steam " +
+                "and paste the launch options into its properties.\n\nCopy the launch options to the clipboard?";
+            if (MessageBox.Show(message, "Launch Error", MessageBoxButton.YesNo, MessageBoxImage.Error) != MessageBoxResult.Yes)
+                return;
+            try
+            {
+                Clipboard.SetText(arguments);
+                MessageBox.Show("Launch options copied. Game executable:\n" + exePath, "Launch Error",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Copying failed: " + ex.Message + "\n\nLaunch options:\n" + arguments, "Launch Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void ShowCrashDialog(int exitCode)
         {
             string logsDir = PathHelper.GetLogsPath(_installDir);
             string latestLog = null;
-
             try
             {
                 if (Directory.Exists(logsDir))
-                {
-                    var logFile = Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories)
-                        .OrderByDescending(f => File.GetLastWriteTime(f))
+                    latestLog = Directory.GetFiles(logsDir, "*.log", SearchOption.AllDirectories)
+                        .OrderByDescending(File.GetLastWriteTime)
                         .FirstOrDefault();
-                    if (logFile != null)
-                        latestLog = logFile;
-                }
             }
             catch { }
 
@@ -825,29 +952,288 @@ namespace DantesInferno.Launcher
             message += IssuesUrl + "\n\n";
             message += "Click OK to open the log folder and the GitHub issues page.";
 
-            var result = MessageBox.Show(message, "Game Crashed", MessageBoxButton.OKCancel, MessageBoxImage.Error);
-            if (result == MessageBoxResult.OK)
+            if (MessageBox.Show(message, "Game Crashed", MessageBoxButton.OKCancel, MessageBoxImage.Error) == MessageBoxResult.OK)
+                OpenProblemReport();
+        }
+
+        private void ReportProblem_Click(object sender, RoutedEventArgs e)
+        {
+            OpenProblemReport();
+        }
+
+        private void ExportSaves_Click(object sender, RoutedEventArgs e)
+        {
+            var roots = new List<KeyValuePair<string, string>>
+            {
+                new KeyValuePair<string, string>("Portable", PathHelper.GetPortableDataPath(_installDir)),
+                new KeyValuePair<string, string>("Documents", PathHelper.GetDocumentsDataPath()),
+                new KeyValuePair<string, string>("LocalAppData", Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "dantes_inferno")),
+            };
+            var profiles = new List<KeyValuePair<string, string>>();
+            foreach (var root in roots)
+            {
+                if (!Directory.Exists(root.Value))
+                    continue;
+                foreach (string dir in Directory.GetDirectories(root.Value))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (name.Length == 16 && name != "0000000000000000" &&
+                        name.All(c => Uri.IsHexDigit(c)))
+                        profiles.Add(new KeyValuePair<string, string>(root.Key, dir));
+                }
+            }
+            if (profiles.Count == 0)
+            {
+                MessageBox.Show("No save files were found.", "Export Saves", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Export Saves",
+                FileName = "dantes_inferno_saves_" + DateTime.Now.ToString("yyyyMMdd_HHmm", CultureInfo.InvariantCulture) + ".zip",
+                Filter = "Zip archive (*.zip)|*.zip",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            };
+            if (dialog.ShowDialog(this) != true)
+                return;
+            string zip = dialog.FileName;
+
+            string staging = Path.Combine(Path.GetTempPath(), "dantes_inferno_saves_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                foreach (var profile in profiles)
+                    CopyDirectory(profile.Value, Path.Combine(staging, profile.Key, Path.GetFileName(profile.Value)));
+                if (File.Exists(zip))
+                    File.Delete(zip);
+                var psi = new ProcessStartInfo
+                {
+                    FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "tar.exe"),
+                    Arguments = "-a -c -f \"" + zip + "\" " + string.Join(" ",
+                        profiles.Select(p => p.Key).Distinct().Select(k => "\"" + k + "\"")),
+                    WorkingDirectory = staging,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using (var process = Process.Start(psi))
+                {
+                    process.WaitForExit();
+                    if (process.ExitCode != 0 || !File.Exists(zip))
+                        throw new IOException("tar exited with code " + process.ExitCode);
+                }
+                OpenInExplorer("/select,\"" + zip + "\"");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("The saves could not be exported:\n" + ex.Message, "Export Saves",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
             {
                 try
                 {
-                    if (Directory.Exists(logsDir))
-                        Process.Start(new ProcessStartInfo("explorer.exe", "\"" + logsDir + "\"") { UseShellExecute = true });
-                    else
-                        Process.Start(new ProcessStartInfo("explorer.exe", "\"" + _installDir + "\"") { UseShellExecute = true });
-                }
-                catch { }
-
-                try
-                {
-                    Process.Start(new ProcessStartInfo(IssuesUrl) { UseShellExecute = true });
+                    if (Directory.Exists(staging))
+                        Directory.Delete(staging, true);
                 }
                 catch { }
             }
         }
 
+        private void OpenProblemReport()
+        {
+            string logsDir = PathHelper.GetLogsPath(_installDir);
+            string zip = Path.Combine(logsDir, "report.zip");
+            bool zipped = false;
+            try
+            {
+                var logs = Directory.Exists(logsDir)
+                    ? Directory.GetFiles(logsDir, "*.log")
+                        .Where(f => Path.GetFileName(f).StartsWith("dantes_inferno", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(f => File.GetLastWriteTime(f))
+                        .Take(3)
+                        .Concat(new[] { "iso_check.log", "extract-xiso.log" }
+                            .Select(n => Path.Combine(logsDir, n))
+                            .Where(File.Exists))
+                        .Select(Path.GetFileName)
+                        .ToList()
+                    : new List<string>();
+                if (logs.Count > 0)
+                {
+                    if (File.Exists(zip))
+                        File.Delete(zip);
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "tar.exe"),
+                        Arguments = "-a -c -f report.zip " + string.Join(" ", logs.Select(l => "\"" + l + "\"")),
+                        WorkingDirectory = logsDir,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+                    using (var process = Process.Start(psi))
+                    {
+                        process.WaitForExit(10000);
+                        zipped = process.HasExited && process.ExitCode == 0 && File.Exists(zip);
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (zipped)
+                    OpenInExplorer("/select,\"" + zip + "\"");
+                else if (Directory.Exists(logsDir))
+                    OpenInExplorer("\"" + logsDir + "\"");
+                else
+                    OpenInExplorer("\"" + _installDir + "\"");
+            }
+            catch { }
+
+            try
+            {
+                OpenUrl(IssuesUrl + "/new");
+            }
+            catch { }
+
+            MessageBox.Show(zipped
+                    ? "Your latest logs are in report.zip (selected in the folder that just opened).\n\nDrag it into the GitHub issue and describe what happened."
+                    : "Attach the newest .log file from the folder that just opened to the GitHub issue and describe what happened.",
+                "Report a Problem", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         private void ExitButton_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        {
+            WindowState = WindowState.Minimized;
+        }
+
+        private void TitleBar_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ButtonState == System.Windows.Input.MouseButtonState.Pressed)
+                DragMove();
+        }
+
+        private void Nav_Checked(object sender, RoutedEventArgs e)
+        {
+            if (MainTabControl == null)
+                return;
+            if (!int.TryParse((sender as FrameworkElement)?.Tag as string, out int index))
+                return;
+            if (MainTabControl.SelectedItem == TabSettings || MainTabControl.SelectedItem == TabControls)
+                AutoSave();
+            MainTabControl.SelectedIndex = index;
+        }
+
+        private void ChangeSettings_Click(object sender, RoutedEventArgs e)
+        {
+            NavSettings.IsChecked = true;
+        }
+
+        private bool AutoSave()
+        {
+            if (_config == null || !SaveSettingsToConfig())
+                return false;
+            SaveKeybindsToConfig();
+            _config.Save();
+            RefreshSettingsSummary();
+            return true;
+        }
+
+        private void RefreshSettingsSummary()
+        {
+            var parts = new List<string>();
+            if (DisplayOptions.IsRendererFallback(_config))
+                parts.Add("D3D12 fallback");
+            else
+                parts.Add(DisplayOptions.TryParseResolution(_config.RenderResolution, out int width, out int height)
+                    ? DisplayOptions.FormatResolution(width, height)
+                    : DisplayOptions.NativeResolution(_displayAspect));
+            parts.Add(DisplayOptions.FrameRateFor(_config, _displayAspect) + " FPS");
+            if (_config.Smaa)
+                parts.Add("SMAA");
+            if (!_config.Fullscreen)
+                parts.Add("Windowed");
+            SettingsSummaryText.Text = string.Join("  \u00B7  ", parts);
+        }
+
+        private void InstallDlc_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = Lt(LauncherLocalizer.InstallDlc),
+                Multiselect = true,
+                Filter = "DLC packages and archives|*.*",
+            };
+            if (dialog.ShowDialog(this) == true)
+                InstallDlc(dialog.FileNames);
+        }
+
+        private void DlcTab_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void DlcTab_Drop(object sender, DragEventArgs e)
+        {
+            var paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (paths != null && paths.Length > 0)
+                InstallDlc(paths);
+        }
+
+        private void InstallDlc(string[] paths)
+        {
+            if (_gameRunning)
+            {
+                MessageBox.Show("Close the game before installing DLC.", "Install DLC", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            string dlcRoot = PathHelper.GetDlcPath(_installDir);
+            InstallDlcButton.IsEnabled = false;
+            PlayButton.IsEnabled = false;
+            DlcStatusText.Text = "Checking DLC packages...";
+            Task.Factory.StartNew(() => DlcInstaller.Install(paths, dlcRoot)).ContinueWith(task =>
+            {
+                InstallDlcButton.IsEnabled = true;
+                PlayButton.IsEnabled = !_gameRunning;
+                RefreshDlcStatus();
+                if (task.Exception != null)
+                {
+                    MessageBox.Show("Installing DLC failed:\n" + task.Exception.GetBaseException().Message, "Install DLC",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                ShowDlcInstallResult(task.Result);
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        private void ShowDlcInstallResult(DlcInstallResult result)
+        {
+            var text = new StringBuilder();
+            if (result.Installed.Count > 0)
+                text.AppendLine("Installed:\n  " + string.Join("\n  ", result.Installed) + "\n");
+            if (result.AlreadyInstalled.Count > 0)
+                text.AppendLine("Already installed:\n  " + string.Join("\n  ", result.AlreadyInstalled) + "\n");
+            if (result.Skipped.Count > 0)
+                text.AppendLine("Skipped:\n  " + string.Join("\n  ", result.Skipped) + "\n");
+            if (result.Errors.Count > 0)
+                text.AppendLine("Problems:\n  " + string.Join("\n  ", result.Errors) + "\n");
+            if (result.UnknownFiles > 0)
+                text.AppendLine(result.UnknownFiles + " file(s) were not Xbox 360 packages and were ignored. " +
+                    "DLC must be the original package files (names like 23471E7296C26144C5E0...), not folders extracted from them.\n");
+            if (result.Installed.Count == 0 && result.AlreadyInstalled.Count == 0)
+                text.AppendLine("No Dante's Inferno DLC was found in what you selected.");
+            else if (result.Installed.Count > 0)
+                text.AppendLine("The game installs new DLC the next time it starts.");
+            if (result.Installed.Concat(result.AlreadyInstalled).Any(n => n.IndexOf("Lucia", StringComparison.OrdinalIgnoreCase) >= 0))
+                text.AppendLine("\nTrials of St. Lucia installs, but its arena mode is not playable in the port yet.");
+            MessageBox.Show(text.ToString().TrimEnd(), "Install DLC", MessageBoxButton.OK,
+                result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
 
         private void OpenDlcFolder_Click(object sender, RoutedEventArgs e)
@@ -857,7 +1243,7 @@ namespace DantesInferno.Launcher
             {
                 if (!Directory.Exists(dlcPath))
                     Directory.CreateDirectory(dlcPath);
-                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dlcPath + "\"") { UseShellExecute = true });
+                OpenInExplorer("\"" + dlcPath + "\"");
                 RefreshDlcStatus();
             }
             catch (Exception ex)
@@ -868,12 +1254,12 @@ namespace DantesInferno.Launcher
 
         private void OpenTuFolder_Click(object sender, RoutedEventArgs e)
         {
-            string gameDir = PathHelper.GetGameDataPath(_installDir);
+            string gameDir = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
             try
             {
                 if (!Directory.Exists(gameDir))
                     Directory.CreateDirectory(gameDir);
-                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + gameDir + "\"") { UseShellExecute = true });
+                OpenInExplorer("\"" + gameDir + "\"");
                 RefreshDlcStatus();
             }
             catch (Exception ex)
@@ -885,29 +1271,29 @@ namespace DantesInferno.Launcher
         private void RefreshDlcStatus()
         {
             string dlcPath = PathHelper.GetDlcPath(_installDir);
-            string tuPath = PathHelper.GetTitleUpdatePath(_installDir);
+            string tuPath = PathHelper.GetTitleUpdatePath(_config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir));
 
-            var parts = new List<string>();
-
-            int dlcCount = 0;
-            if (Directory.Exists(dlcPath))
+            var dlcNames = new List<string>();
+            try
             {
-                try
-                {
-                    dlcCount = Directory.GetFiles(dlcPath, "*", SearchOption.AllDirectories)
-                        .Count(f => !Path.GetFileName(f).Equals(".installed", StringComparison.OrdinalIgnoreCase));
-                }
-                catch { }
+                dlcNames = DlcInstaller.ListInstalled(dlcPath)
+                    .Select(p => string.IsNullOrEmpty(p.DisplayName) ? Path.GetFileName(p.Path) : p.DisplayName)
+                    .Distinct()
+                    .OrderBy(n => n)
+                    .ToList();
             }
-            parts.Add(dlcCount > 0
-                ? LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderFound, dlcCount)
-                : LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.DlcFolderEmpty));
+            catch { }
+            string dlcText = dlcNames.Count > 0
+                ? Lf(LauncherLocalizer.DlcFolderFound, dlcNames.Count)
+                : Lt(LauncherLocalizer.DlcFolderEmpty);
+            bool tuReady = File.Exists(tuPath) || File.Exists(PathHelper.GetBundledTitleUpdatePath(_installDir));
+            string tuText = Lt(tuReady ? LauncherLocalizer.TuInstalled : LauncherLocalizer.TuNotFound);
 
-            parts.Add(File.Exists(tuPath)
-                ? LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.TuInstalled)
-                : LauncherLocalizer.Get(_launcherLanguage, LauncherLocalizer.TuNotFound));
-
-            DlcStatusText.Text = string.Join("\n", parts);
+            DlcStatusText.Text = dlcText + string.Concat(dlcNames.Select(n => "\n  " + n)) + "\n" + tuText;
+            StatusTuText.Text = tuText;
+            StatusTuDot.Fill = (Brush)FindResource(tuReady ? "SuccessBrush" : "DangerBrush");
+            StatusDlcText.Text = dlcText;
+            StatusDlcDot.Fill = (Brush)FindResource(dlcNames.Count > 0 ? "SuccessBrush" : "TextMutedBrush");
         }
 
         private void ApplyRecommended_Click(object sender, RoutedEventArgs e)
@@ -922,7 +1308,7 @@ namespace DantesInferno.Launcher
             _config.Fullscreen = true;
             _config.InputBackend = "sdl";
             PopulateControls();
-            MessageBox.Show("Recommended settings applied. Click Save Settings to keep them.", "Recommended",
+            MessageBox.Show("Recommended settings applied.", "Recommended",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
@@ -954,22 +1340,14 @@ namespace DantesInferno.Launcher
                 var localVersion = GitHubUpdater.GetLocalVersion(_installDir);
                 if (release.Version > localVersion)
                 {
-                    if (FindInstallerAsset(release) != null)
-                    {
-                        _pendingUpdate = release;
-                        DownloadUpdateButton.Visibility = Visibility.Visible;
-                        UpdateStatusText.Text =
-                            $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n" +
-                            $"{release.Body}\n\nClick \"Download & Install\" to get the new installer.";
-                    }
-                    else
-                    {
-                        UpdateStatusText.Text =
-                            $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n" +
-                            $"{release.Body}\n\nNo installer asset found in this release. " +
-                            "Visit the releases page to download manually:\n" +
-                            release.HtmlUrl;
-                    }
+                    bool hasInstaller = FindInstallerAsset(release) != null;
+                    _pendingUpdate = hasInstaller ? release : null;
+                    DownloadUpdateButton.Visibility = hasInstaller ? Visibility.Visible : Visibility.Collapsed;
+                    UpdateStatusText.Text =
+                        $"Update available!\nVersion: {release.TagName}\nName: {release.Name}\n\n{release.Body}\n\n" +
+                        (hasInstaller
+                            ? "Click \"Download & Install\" to get the new installer."
+                            : "No installer asset found in this release. Visit the releases page to download manually:\n" + release.HtmlUrl);
                 }
                 else
                 {
@@ -1001,7 +1379,7 @@ namespace DantesInferno.Launcher
                     "This copy was unpacked from the portable zip: download the new portable zip from the release page " +
                     "and extract it over this folder (your saves and settings are kept).",
                     "Update Available", MessageBoxButton.OK, MessageBoxImage.Information);
-                Process.Start(new ProcessStartInfo(_pendingUpdate.HtmlUrl) { UseShellExecute = true });
+                OpenUrl(_pendingUpdate.HtmlUrl);
                 return;
             }
 
@@ -1087,11 +1465,7 @@ namespace DantesInferno.Launcher
 
                     try
                     {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = downloadedPath,
-                            UseShellExecute = true,
-                        });
+                        OpenUrl(downloadedPath);
                         Application.Current.Shutdown();
                     }
                     catch (Exception ex)
@@ -1106,12 +1480,17 @@ namespace DantesInferno.Launcher
 
         private void SupportButton_Click(object sender, RoutedEventArgs e)
         {
-            Process.Start(new ProcessStartInfo("https://ko-fi.com/zerkiller") { UseShellExecute = true });
+            OpenUrl("https://ko-fi.com/zerkiller");
         }
 
-        private void TrialsServerButton_Click(object sender, RoutedEventArgs e)
+        private static void OpenUrl(string url)
         {
-            Process.Start(new ProcessStartInfo("https://ko-fi.com/zerkiller") { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+
+        private static void OpenInExplorer(string arguments)
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", arguments) { UseShellExecute = true });
         }
     }
 }
