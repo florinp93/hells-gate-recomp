@@ -29,20 +29,27 @@ namespace {
 
 void PauseFenceSpin(bool waiting) {
   thread_local uint32_t streak = 0;
+#if defined(__ANDROID__)
+  thread_local std::chrono::steady_clock::time_point started;
+#endif
   if (!waiting) {
     streak = 0;
     return;
   }
-  // On Android only yield: sleeping wakes late on every fence and lets the
-  // cores clock down, which costs about a sixth of the frame rate (35 vs
-  // 41 fps on a Snapdragon 8 Gen 2). Yielding still frees the core for the
-  // threads the wait depends on.
 #if defined(__ANDROID__)
-  constexpr uint32_t kYieldsBeforeSleep = UINT32_MAX;
+  // Yield through the first millisecond: sleeping on every fence wakes late
+  // and lets the cores clock down (35 vs 41 fps unlocked on a Snapdragon
+  // 8 Gen 2). Past that, the GPU is the bottleneck and yielding only kept a
+  // core at full power, heating the phone into throttling the GPU (heavy
+  // fights dropped to 26 fps), so sleep.
+  if (streak++ == 0) started = std::chrono::steady_clock::now();
+  if (std::chrono::steady_clock::now() - started < std::chrono::milliseconds(1)) {
+    std::this_thread::yield();
+    return;
+  }
+  std::this_thread::sleep_for(std::chrono::microseconds(200));
 #else
-  constexpr uint32_t kYieldsBeforeSleep = 32;
-#endif
-  if (++streak < kYieldsBeforeSleep) {
+  if (++streak < 32) {
     std::this_thread::yield();
     return;
   }
@@ -60,6 +67,7 @@ void PauseFenceSpin(bool waiting) {
   }
 #endif
   std::this_thread::sleep_for(std::chrono::microseconds(250));
+#endif
 }
 
 }  // namespace
