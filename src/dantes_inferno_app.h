@@ -328,18 +328,38 @@ class DantesInfernoApp : public rex::ReXApp {
     perf_thread_ = std::thread([this] {
       uint32_t last = 0;
       auto last_t = std::chrono::steady_clock::now();
+      // Polled every 2 ms so single long frames show up, not only the 5 s average.
+      uint32_t seen = 0;
+      auto seen_t = last_t;
+      double worst_ms = 0;
+      uint32_t slow = 0;
       while (!shutting_down_.load()) {
-        for (int i = 0; i < 50 && !shutting_down_.load(); ++i)
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
         auto* cp = GetCommandProcessor();
+        for (int i = 0; i < 2500 && !shutting_down_.load(); ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          if (!cp) continue;
+          uint32_t c = cp->swap_counter();
+          if (c == seen) continue;
+          auto t = std::chrono::steady_clock::now();
+          if (seen != 0) {
+            double ms = std::chrono::duration<double, std::milli>(t - seen_t).count() / (c - seen);
+            worst_ms = std::max(worst_ms, ms);
+            if (ms > 50.0) ++slow;
+          }
+          seen = c;
+          seen_t = t;
+        }
         if (!cp) continue;
         uint32_t now = cp->swap_counter();
         auto t = std::chrono::steady_clock::now();
         double secs = std::chrono::duration<double>(t - last_t).count();
         if (last != 0 && secs > 0) {
-          REXLOG_INFO("PERF: guest {:.1f} fps ({} frames in {:.1f} s)", (now - last) / secs,
-                      now - last, secs);
+          REXLOG_INFO("PERF: guest {:.1f} fps ({} frames in {:.1f} s), worst frame {:.0f} ms, "
+                      "{} over 50 ms",
+                      (now - last) / secs, now - last, secs, worst_ms, slow);
         }
+        worst_ms = 0;
+        slow = 0;
         last = now;
         last_t = t;
       }
