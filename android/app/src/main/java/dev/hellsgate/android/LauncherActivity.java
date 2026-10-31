@@ -155,6 +155,14 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("profiler", on).apply());
         root.addView(profBox);
 
+        android.widget.CheckBox gpuTimingBox = new android.widget.CheckBox(this);
+        gpuTimingBox.setText("Diagnostics: log GPU time per render pass (for bug reports only)");
+        gpuTimingBox.setTextColor(Color.GRAY);
+        gpuTimingBox.setChecked(GamePaths.prefs(this).getBoolean("gpu_timing", false));
+        gpuTimingBox.setOnCheckedChangeListener((b, on) ->
+                GamePaths.prefs(this).edit().putBoolean("gpu_timing", on).apply());
+        root.addView(gpuTimingBox);
+
         importSavesButton = new Button(this);
         importSavesButton.setText("Import saves");
         importSavesButton.setOnClickListener(v -> startActivityForResult(

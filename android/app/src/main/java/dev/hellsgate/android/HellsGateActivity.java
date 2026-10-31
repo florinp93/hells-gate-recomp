@@ -71,6 +71,8 @@ public class HellsGateActivity extends SDLActivity {
                 "--vulkan_dynamic_rendering="
                         + !GamePaths.prefs(this).getBoolean("classic_render_passes", false),
                 "--show_fps_overlay=" + GamePaths.prefs(this).getBoolean("show_fps", false),
+                // Launcher diagnostics option: GPU timestamps around every render pass.
+                "--gpu_timing=" + GamePaths.prefs(this).getBoolean("gpu_timing", false),
                 // Wider than 16:9 widens the game's view and fills the screen to that shape.
                 "--ultrawide_target_aspect="
                         + String.format(java.util.Locale.ROOT, "%.4f", GamePaths.targetAspect(this)),

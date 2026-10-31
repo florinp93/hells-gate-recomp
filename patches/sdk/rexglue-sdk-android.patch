@@ -30,6 +30,116 @@ index d876846..73f67ea 100644
  template <class, class>
  struct clock_time_conversion {};
  
+diff --git a/include/rex/graphics/shared_memory.h b/include/rex/graphics/shared_memory.h
+index 2f5c8cf..b7460a4 100644
+--- a/include/rex/graphics/shared_memory.h
++++ b/include/rex/graphics/shared_memory.h
+@@ -98,6 +98,15 @@ class SharedMemory {
+   // regions in those pages.
+   void RangeWrittenByGpu(uint32_t start, uint32_t length);
+ 
++  // For backends that can upload at the start of a submission (Vulkan): call
++  // when a submission begins. Byte ranges the GPU reads or writes are then
++  // recorded until the next call, and an upload none of whose pages were used
++  // earlier in the submission is marked hoistable for UploadRanges.
++  void BeginSubmissionUseTracking() {
++    submission_uses_.clear();
++    track_submission_uses_ = true;
++  }
++
+   // Read-only view of guest physical memory (big-endian), for diagnostics.
+   const uint8_t* TranslatePhysicalForDebug(uint32_t guest_address) const;
+ 
+@@ -146,6 +155,11 @@ class SharedMemory {
+   virtual bool UploadRanges(
+       const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) = 0;
+ 
++  // Set for the UploadRanges call: nothing earlier in the current submission
++  // reads or writes these pages, so the copy may run at the start of the
++  // submission instead of here.
++  bool upload_hoistable_ = false;
++
+  private:
+   memory::Memory& memory_;
+ 
+@@ -167,6 +181,10 @@ class SharedMemory {
+   // persistently allocated vector).
+   std::vector<std::pair<uint32_t, uint32_t>> upload_ranges_;
+ 
++  // [start, end) byte ranges used by the GPU in the current submission.
++  std::vector<std::pair<uint32_t, uint32_t>> submission_uses_;
++  bool track_submission_uses_ = false;
++
+   // Mutex between the guest memory subsystem and the command processor, to be
+   // locked when checking or updating validity of pages/ranges and when firing
+   // watches.
+diff --git a/include/rex/graphics/vulkan/deferred_command_buffer.h b/include/rex/graphics/vulkan/deferred_command_buffer.h
+index 9d2a848..e3cc78f 100644
+--- a/include/rex/graphics/vulkan/deferred_command_buffer.h
++++ b/include/rex/graphics/vulkan/deferred_command_buffer.h
+@@ -13,6 +13,7 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstring>
++#include <memory>
+ #include <vector>
+ 
+ #include <rex/assert.h>
+@@ -27,10 +28,17 @@ class DeferredCommandBuffer {
+  public:
+   DeferredCommandBuffer(const VulkanCommandProcessor& command_processor,
+                         size_t initial_size_bytes = 1024 * 1024);
++  ~DeferredCommandBuffer();
+ 
+   void Reset();
+   void Execute(VkCommandBuffer command_buffer);
+ 
++  // gpu_timing diagnostics: with the cvar on, Execute brackets every render
++  // pass with GPU timestamps and labels the work between passes, and the
++  // results are summarized in the log every 5 seconds. Call before the device
++  // is destroyed.
++  void ShutdownGpuTiming();
++
+   // render_pass_begin->pNext of all barriers must be null.
+   void CmdVkBeginRenderPass(const VkRenderPassBeginInfo* render_pass_begin,
+                             VkSubpassContents contents) {
+@@ -181,6 +189,16 @@ class DeferredCommandBuffer {
+                 sizeof(VkBufferCopy) * region_count);
+   }
+ 
++  // Recorded to run before everything else in the submission, followed by a
++  // barrier making the writes visible to all later commands. Only for copies
++  // into memory that nothing earlier in the submission uses.
++  void CmdVkCopyBufferPrologue(VkBuffer src_buffer, VkBuffer dst_buffer, uint32_t region_count,
++                               const VkBufferCopy* regions) {
++    for (uint32_t i = 0; i < region_count; ++i) {
++      prologue_copies_.push_back({src_buffer, dst_buffer, regions[i]});
++    }
++  }
++
+   void CmdVkBeginQuery(VkQueryPool query_pool, uint32_t query, VkQueryControlFlags flags) {
+     auto& args = *reinterpret_cast<ArgsVkBeginQuery*>(
+         WriteCommand(Command::kVkBeginQuery, sizeof(ArgsVkBeginQuery)));
+@@ -581,8 +599,19 @@ class DeferredCommandBuffer {
+ 
+   const VulkanCommandProcessor& command_processor_;
+ 
++  struct GpuTiming;
++  std::unique_ptr<GpuTiming> gpu_timing_;
++
++
+   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
+   std::vector<uintmax_t> command_stream_;
++
++  struct PrologueCopy {
++    VkBuffer src_buffer;
++    VkBuffer dst_buffer;
++    VkBufferCopy region;
++  };
++  std::vector<PrologueCopy> prologue_copies_;
+ };
+ 
+ }  // namespace rex::graphics::vulkan
 diff --git a/include/rex/platform.h b/include/rex/platform.h
 index e90418d..b4fed73 100644
 --- a/include/rex/platform.h
@@ -160,6 +270,52 @@ index 0000000..f754570
 +
 +}  // namespace ui
 +}  // namespace rex
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 947817f..08078e0 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -76,6 +76,8 @@ class VulkanDevice {
+     VkDeviceSize minStorageBufferOffsetAlignment = 256;
+     uint32_t maxFramebufferWidth = 4096;
+     uint32_t maxFramebufferHeight = 4096;
++    VkBool32 timestampComputeAndGraphics = VK_FALSE;
++    float timestampPeriod = 1.0f;
+     VkSampleCountFlags framebufferColorSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+     VkSampleCountFlags framebufferDepthSampleCounts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+     VkSampleCountFlags framebufferStencilSampleCounts =
+@@ -274,6 +276,12 @@ class VulkanDevice {
+   // May be the same as queue_family_graphics_compute().
+   uint32_t queue_family_sparse_binding() const { return queue_family_sparse_binding_; }
+ 
++  // The queue to present on in the family, not shared with submissions if the
++  // family has more than one enabled queue.
++  uint32_t GetPresentQueueIndex(const uint32_t queue_family_index) const {
++    return queue_families()[queue_family_index].queues.size() > 1 ? 1 : 0;
++  }
++
+   Queue::Acquisition AcquireQueue(const uint32_t queue_family_index,
+                                   const uint32_t queue_index) const {
+     return queue_families()[queue_family_index].queues[queue_index]->Acquire();
+diff --git a/include/rex/ui/vulkan/functions/device_1_0.inc b/include/rex/ui/vulkan/functions/device_1_0.inc
+index aa55a4a..c8bb914 100644
+--- a/include/rex/ui/vulkan/functions/device_1_0.inc
++++ b/include/rex/ui/vulkan/functions/device_1_0.inc
+@@ -32,6 +32,7 @@ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilCompareMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilReference)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetStencilWriteMask)
+ XE_UI_VULKAN_FUNCTION(vkCmdSetViewport)
++XE_UI_VULKAN_FUNCTION(vkCmdWriteTimestamp)
+ XE_UI_VULKAN_FUNCTION(vkCreateBuffer)
+ XE_UI_VULKAN_FUNCTION(vkCreateBufferView)
+ XE_UI_VULKAN_FUNCTION(vkCreateCommandPool)
+@@ -72,6 +73,7 @@ XE_UI_VULKAN_FUNCTION(vkGetBufferMemoryRequirements)
+ XE_UI_VULKAN_FUNCTION(vkGetDeviceQueue)
+ XE_UI_VULKAN_FUNCTION(vkGetFenceStatus)
+ XE_UI_VULKAN_FUNCTION(vkGetImageMemoryRequirements)
++XE_UI_VULKAN_FUNCTION(vkGetQueryPoolResults)
+ XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
+ XE_UI_VULKAN_FUNCTION(vkMapMemory)
+ XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
 diff --git a/include/rex/ui/windowed_app.h b/include/rex/ui/windowed_app.h
 index 50638d6..b4ead81 100644
 --- a/include/rex/ui/windowed_app.h
@@ -1052,11 +1208,80 @@ index 526ebe1..426bbfd 100644
          }
          rex::thread::SyncMemory();
          ReturnFromWait();
+diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
+index 78a020a..8f34dd5 100644
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -259,6 +259,9 @@ const uint8_t* SharedMemory::TranslatePhysicalForDebug(uint32_t guest_address) c
+ }
+ 
+ void SharedMemory::RangeWrittenByGpu(uint32_t start, uint32_t length) {
++  if (track_submission_uses_ && length) {
++    submission_uses_.emplace_back(start, start + length);
++  }
+   if (length == 0 || start >= kBufferSize) {
+     return;
+   }
+@@ -493,6 +496,38 @@ bool SharedMemory::RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, si
+   COUNT_profile_set("gpu/shared_memory/request_ranges_upload_count",
+                     uint32_t(upload_ranges_.size()));
+ 
++  upload_hoistable_ = false;
++  if (track_submission_uses_) {
++    if (!upload_ranges_.empty()) {
++      upload_hoistable_ = true;
++      for (const std::pair<uint32_t, uint32_t>& upload_range : upload_ranges_) {
++        uint64_t upload_start = uint64_t(upload_range.first) << page_size_log2_;
++        uint64_t upload_end = uint64_t(upload_range.first + upload_range.second)
++                              << page_size_log2_;
++        for (const std::pair<uint32_t, uint32_t>& use : submission_uses_) {
++          if (use.first < upload_end && upload_start < use.second) {
++            upload_hoistable_ = false;
++            break;
++          }
++        }
++        if (!upload_hoistable_) break;
++      }
++      if (!upload_hoistable_) {
++        // Written in place: later uploads of these pages must stay after it.
++        for (const std::pair<uint32_t, uint32_t>& upload_range : upload_ranges_) {
++          submission_uses_.emplace_back(
++              upload_range.first << page_size_log2_,
++              uint32_t(std::min(uint64_t(upload_range.first + upload_range.second)
++                                    << page_size_log2_,
++                                uint64_t(UINT32_MAX))));
++        }
++      }
++    }
++    for (const std::pair<uint32_t, uint32_t>& range : merged_ranges) {
++      submission_uses_.emplace_back(range.first, range.first + range.second);
++    }
++  }
++
+   if (upload_ranges_.empty()) {
+     return true;
+   }
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index 19e7170..7b0e755 100644
+index 19e7170..7b3651a 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
-@@ -5276,7 +5276,13 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
+@@ -1900,6 +1900,7 @@ void VulkanCommandProcessor::ShutdownContext() {
+   AwaitAllQueueOperationsCompletion();
+   InvalidateAllVertexBufferResidency();
+   ShutdownOcclusionQueryResources();
++  deferred_command_buffer_.ShutdownGpuTiming();
+ 
+   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+@@ -5144,6 +5145,7 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+     // the end of the submission (when async pipeline object creation requests
+     // are fulfilled).
+     deferred_command_buffer_.Reset();
++    shared_memory_->BeginSubmissionUseTracking();
+ 
+     // Reset cached state of the command buffer.
+     dynamic_viewport_update_needed_ = true;
+@@ -5276,7 +5278,13 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
        VkCommandPoolCreateInfo command_pool_create_info;
        command_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
        command_pool_create_info.pNext = nullptr;
@@ -1070,6 +1295,348 @@ index 19e7170..7b0e755 100644
        command_pool_create_info.queueFamilyIndex = vulkan_device->queue_family_graphics_compute();
        if (dfn.vkCreateCommandPool(device, &command_pool_create_info, nullptr,
                                    &command_buffer.pool) != VK_SUCCESS) {
+diff --git a/src/graphics/vulkan/deferred_command_buffer.cpp b/src/graphics/vulkan/deferred_command_buffer.cpp
+index b49e033..ce523ee 100644
+--- a/src/graphics/vulkan/deferred_command_buffer.cpp
++++ b/src/graphics/vulkan/deferred_command_buffer.cpp
+@@ -9,27 +9,170 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
++#include <array>
++#include <chrono>
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstring>
++#include <string>
++#include <unordered_map>
++#include <utility>
++#include <vector>
+ 
++#include <fmt/format.h>
+ #include <rex/assert.h>
++#include <rex/cvar.h>
+ #include <rex/dbg.h>
++#include <rex/logging.h>
+ #include <rex/graphics/flags.h>
+ #include <rex/graphics/vulkan/command_processor.h>
+ #include <rex/graphics/vulkan/deferred_command_buffer.h>
+ #include <rex/math.h>
+ 
++REXCVAR_DEFINE_BOOL(gpu_timing, false, "GPU/Vulkan",
++                    "Measure GPU time per render pass and between passes with timestamp "
++                    "queries, and log a summary every 5 seconds (diagnostics)");
++
+ namespace rex::graphics::vulkan {
+ 
++// Timestamps go to the real command buffer while the deferred one is replayed:
++// one before each render pass begins and one after it ends, so each interval
++// is either a pass or the work between two passes (resolves and EDRAM copies
++// are compute dispatches there). Each submission uses one slot of the query
++// pool; a slot is read back without waiting when it comes round again
++// kSlots submissions later.
++struct DeferredCommandBuffer::GpuTiming {
++  static constexpr uint32_t kSlots = 8;
++  static constexpr uint32_t kQueriesPerSlot = 1024;
++
++  struct Interval {
++    uint32_t label;
++    uint32_t draws;
++  };
++  struct Slot {
++    std::vector<Interval> intervals;
++    uint32_t queries = 0;
++  };
++  struct Stat {
++    double ms = 0.0;
++    uint32_t count = 0;
++    uint64_t draws = 0;
++  };
++
++  VkQueryPool pool = VK_NULL_HANDLE;
++  double ms_per_tick = 0.0;
++  std::array<Slot, kSlots> slots;
++  uint32_t slot_index = 0;
++  uint32_t pass_width = 0, pass_height = 0;
++  uint32_t draws = 0, dispatches = 0, copies = 0, clears = 0;
++
++  std::vector<std::string> label_names;
++  std::unordered_map<std::string, uint32_t> label_ids;
++  std::vector<Stat> stats;
++  double busy_ms = 0.0;
++  uint32_t submissions = 0, dropped = 0, overflowed = 0;
++  std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
++
++  uint32_t Label(std::string name) {
++    auto it = label_ids.find(name);
++    if (it != label_ids.end()) return it->second;
++    uint32_t id = uint32_t(label_names.size());
++    label_ids.emplace(name, id);
++    label_names.push_back(std::move(name));
++    stats.emplace_back();
++    return id;
++  }
++
++  uint32_t GapLabel() {
++    const char* name = dispatches ? "between passes: compute (resolve/EDRAM)"
++                       : copies   ? "between passes: copy/upload"
++                       : clears   ? "between passes: clear"
++                                  : "between passes: other";
++    dispatches = copies = clears = 0;
++    return Label(name);
++  }
++
++  void Mark(const ui::vulkan::VulkanDevice::Functions& dfn, VkCommandBuffer command_buffer,
++            uint32_t label) {
++    Slot& slot = slots[slot_index];
++    if (slot.queries >= kQueriesPerSlot) {
++      ++overflowed;
++      return;
++    }
++    dfn.vkCmdWriteTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool,
++                            slot_index * kQueriesPerSlot + slot.queries);
++    if (slot.queries) slot.intervals.push_back({label, draws});
++    ++slot.queries;
++  }
++
++  void Harvest(const ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device) {
++    Slot& slot = slots[slot_index];
++    if (slot.queries < 2) return;
++    uint64_t ticks[kQueriesPerSlot];
++    if (dfn.vkGetQueryPoolResults(device, pool, slot_index * kQueriesPerSlot, slot.queries,
++                                  sizeof(uint64_t) * slot.queries, ticks, sizeof(uint64_t),
++                                  VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
++      ++dropped;
++      return;
++    }
++    for (size_t i = 0; i < slot.intervals.size(); ++i) {
++      Stat& stat = stats[slot.intervals[i].label];
++      stat.ms += double(ticks[i + 1] - ticks[i]) * ms_per_tick;
++      ++stat.count;
++      stat.draws += slot.intervals[i].draws;
++    }
++    busy_ms += double(ticks[slot.queries - 1] - ticks[0]) * ms_per_tick;
++    ++submissions;
++  }
++
++  void LogIfDue() {
++    auto now = std::chrono::steady_clock::now();
++    double seconds = std::chrono::duration<double>(now - window_start).count();
++    if (seconds < 5.0) return;
++    REXGPU_INFO(
++        "GPU-TIMING: GPU busy {:.1f} ms per second, {:.1f} submissions/s ({} not ready, {} "
++        "timestamps over the per-submission limit)",
++        busy_ms / seconds, submissions / seconds, dropped, overflowed);
++    std::vector<uint32_t> order;
++    for (uint32_t i = 0; i < stats.size(); ++i) {
++      if (stats[i].count) order.push_back(i);
++    }
++    std::sort(order.begin(), order.end(),
++              [this](uint32_t a, uint32_t b) { return stats[a].ms > stats[b].ms; });
++    for (size_t i = 0; i < order.size() && i < 12; ++i) {
++      const Stat& stat = stats[order[i]];
++      REXGPU_INFO("GPU-TIMING: {:7.1f} ms/s {:6.1f}/s avg {:6.3f} ms {:6.1f} draws  {}",
++                  stat.ms / seconds, stat.count / seconds, stat.ms / stat.count,
++                  double(stat.draws) / stat.count, label_names[order[i]]);
++    }
++    for (Stat& stat : stats) stat = Stat();
++    busy_ms = 0.0;
++    submissions = dropped = overflowed = 0;
++    window_start = now;
++  }
++};
++
+ DeferredCommandBuffer::DeferredCommandBuffer(const VulkanCommandProcessor& command_processor,
+                                              size_t initial_size)
+     : command_processor_(command_processor) {
+   command_stream_.reserve(initial_size / sizeof(uintmax_t));
+ }
+ 
++DeferredCommandBuffer::~DeferredCommandBuffer() = default;
++
++void DeferredCommandBuffer::ShutdownGpuTiming() {
++  if (gpu_timing_ && gpu_timing_->pool != VK_NULL_HANDLE) {
++    const ui::vulkan::VulkanDevice* vulkan_device = command_processor_.GetVulkanDevice();
++    vulkan_device->functions().vkDestroyQueryPool(vulkan_device->device(), gpu_timing_->pool,
++                                                  nullptr);
++  }
++  gpu_timing_.reset();
++}
++
+ void DeferredCommandBuffer::Reset() {
+   command_stream_.clear();
++  prologue_copies_.clear();
+ }
+ 
+ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+@@ -37,8 +180,76 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
+-  const ui::vulkan::VulkanDevice::Functions& dfn =
+-      command_processor_.GetVulkanDevice()->functions();
++  const ui::vulkan::VulkanDevice* vulkan_device = command_processor_.GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++
++  GpuTiming* timing = nullptr;
++  if (REXCVAR_GET(gpu_timing) && vulkan_device->properties().timestampComputeAndGraphics) {
++    if (!gpu_timing_) {
++      auto new_timing = std::make_unique<GpuTiming>();
++      VkQueryPoolCreateInfo pool_info = {};
++      pool_info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
++      pool_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
++      pool_info.queryCount = GpuTiming::kSlots * GpuTiming::kQueriesPerSlot;
++      if (dfn.vkCreateQueryPool(vulkan_device->device(), &pool_info, nullptr,
++                                &new_timing->pool) == VK_SUCCESS) {
++        new_timing->ms_per_tick = vulkan_device->properties().timestampPeriod / 1e6;
++        gpu_timing_ = std::move(new_timing);
++      } else {
++        REXGPU_ERROR("gpu_timing: failed to create the timestamp query pool");
++      }
++    }
++    timing = gpu_timing_.get();
++  }
++  if (timing) {
++    timing->Harvest(dfn, vulkan_device->device());
++    timing->LogIfDue();
++    GpuTiming::Slot& slot = timing->slots[timing->slot_index];
++    slot.intervals.clear();
++    slot.queries = 0;
++    dfn.vkCmdResetQueryPool(command_buffer, timing->pool,
++                            timing->slot_index * GpuTiming::kQueriesPerSlot,
++                            GpuTiming::kQueriesPerSlot);
++    timing->draws = timing->dispatches = timing->copies = timing->clears = 0;
++    timing->Mark(dfn, command_buffer, 0);
++  }
++
++  if (!prologue_copies_.empty()) {
++    // Earlier submissions may still read the old contents.
++    VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
++    dfn.vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 0,
++                             nullptr);
++    std::stable_sort(prologue_copies_.begin(), prologue_copies_.end(),
++                     [](const PrologueCopy& a, const PrologueCopy& b) {
++                       return a.src_buffer < b.src_buffer ||
++                              (a.src_buffer == b.src_buffer && a.dst_buffer < b.dst_buffer);
++                     });
++    std::vector<VkBufferCopy> regions;
++    for (size_t i = 0; i < prologue_copies_.size();) {
++      size_t j = i;
++      regions.clear();
++      while (j < prologue_copies_.size() &&
++             prologue_copies_[j].src_buffer == prologue_copies_[i].src_buffer &&
++             prologue_copies_[j].dst_buffer == prologue_copies_[i].dst_buffer) {
++        regions.push_back(prologue_copies_[j++].region);
++      }
++      dfn.vkCmdCopyBuffer(command_buffer, prologue_copies_[i].src_buffer,
++                          prologue_copies_[i].dst_buffer, uint32_t(regions.size()),
++                          regions.data());
++      i = j;
++    }
++    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++    dfn.vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0,
++                             nullptr);
++    if (timing) {
++      timing->copies += uint32_t(prologue_copies_.size());
++      timing->Mark(dfn, command_buffer, timing->GapLabel());
++    }
++  }
++
+   const uintmax_t* stream = command_stream_.data();
+   size_t stream_remaining = command_stream_.size();
+   while (stream_remaining) {
+@@ -46,6 +257,38 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+     stream += kCommandHeaderSizeElements;
+     stream_remaining -= kCommandHeaderSizeElements;
+ 
++    if (timing) {
++      switch (header.command) {
++        case Command::kVkBeginRenderPass:
++        case Command::kVkBeginRendering: {
++          timing->Mark(dfn, command_buffer, timing->GapLabel());
++          const VkRect2D& area =
++              header.command == Command::kVkBeginRenderPass
++                  ? reinterpret_cast<const ArgsVkBeginRenderPass*>(stream)->render_area
++                  : reinterpret_cast<const ArgsVkBeginRendering*>(stream)->render_area;
++          timing->pass_width = area.extent.width;
++          timing->pass_height = area.extent.height;
++          timing->draws = 0;
++        } break;
++        case Command::kVkDraw:
++        case Command::kVkDrawIndexed:
++          ++timing->draws;
++          break;
++        case Command::kVkDispatch:
++          ++timing->dispatches;
++          break;
++        case Command::kVkCopyBuffer:
++        case Command::kVkCopyBufferToImage:
++          ++timing->copies;
++          break;
++        case Command::kVkClearColorImage:
++          ++timing->clears;
++          break;
++        default:
++          break;
++      }
++    }
++
+     switch (header.command) {
+       case Command::kVkBeginRenderPass: {
+         auto& args = *reinterpret_cast<const ArgsVkBeginRenderPass*>(stream);
+@@ -56,6 +299,10 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+         render_pass_begin_info.renderPass = args.render_pass;
+         render_pass_begin_info.framebuffer = args.framebuffer;
+         render_pass_begin_info.renderArea = args.render_area;
++        if (timing) {
++          timing->pass_width = render_pass_begin_info.renderArea.extent.width;
++          timing->pass_height = render_pass_begin_info.renderArea.extent.height;
++        }
+         render_pass_begin_info.clearValueCount = args.clear_value_count;
+         if (render_pass_begin_info.clearValueCount) {
+           offset_bytes = rex::align(offset_bytes, alignof(VkClearValue));
+@@ -188,6 +435,12 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+ 
+       case Command::kVkEndRenderPass:
+         dfn.vkCmdEndRenderPass(command_buffer);
++        if (timing) {
++          timing->Mark(dfn, command_buffer,
++                       timing->Label(fmt::format("pass {}x{}", timing->pass_width,
++                                                 timing->pass_height)));
++          timing->draws = 0;
++        }
+         break;
+ 
+       case Command::kVkBeginRendering: {
+@@ -227,6 +480,12 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+ 
+       case Command::kVkEndRendering:
+         dfn.vkCmdEndRendering(command_buffer);
++        if (timing) {
++          timing->Mark(dfn, command_buffer,
++                       timing->Label(fmt::format("pass {}x{}", timing->pass_width,
++                                                 timing->pass_height)));
++          timing->draws = 0;
++        }
+         break;
+ 
+       case Command::kVkPipelineBarrier: {
+@@ -322,6 +581,11 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+     stream += header.arguments_size_elements;
+     stream_remaining -= header.arguments_size_elements;
+   }
++
++  if (timing) {
++    timing->Mark(dfn, command_buffer, timing->GapLabel());
++    timing->slot_index = (timing->slot_index + 1) % GpuTiming::kSlots;
++  }
+ }
+ 
+ void DeferredCommandBuffer::CmdVkPipelineBarrier(
 diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
 index 79a787f..57a7966 100644
 --- a/src/graphics/vulkan/pipeline_cache.cpp
@@ -1087,6 +1654,84 @@ index 79a787f..57a7966 100644
          storage_write_request_cond_.wait(lock);
          continue;
        }
+diff --git a/src/graphics/vulkan/shared_memory.cpp b/src/graphics/vulkan/shared_memory.cpp
+index 6788214..ebe2b51 100644
+--- a/src/graphics/vulkan/shared_memory.cpp
++++ b/src/graphics/vulkan/shared_memory.cpp
+@@ -27,6 +27,11 @@ REXCVAR_DEFINE_BOOL(vulkan_sparse_shared_memory, true, "GPU/Vulkan",
+                     "Use sparse shared memory on Vulkan")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_BOOL(vulkan_hoist_uploads, true, "GPU/Vulkan",
++                    "Copy guest memory that nothing earlier in the submission uses at the start "
++                    "of the submission, instead of ending the render pass for each upload "
++                    "(costly on tiled mobile GPUs)");
++
+ namespace rex::graphics::vulkan {
+ 
+ VulkanSharedMemory::VulkanSharedMemory(VulkanCommandProcessor& command_processor,
+@@ -273,16 +278,33 @@ bool VulkanSharedMemory::UploadRanges(
+   if (upload_page_ranges.empty()) {
+     return true;
+   }
+-  // upload_page_ranges are sorted, use them to determine the range for the
+-  // ordering barrier.
+-  Use(Usage::kTransferDestination,
++  DeferredCommandBuffer& command_buffer = command_processor_.deferred_command_buffer();
++  uint64_t submission_current = command_processor_.GetCurrentSubmission();
++  // Nothing earlier in this submission touches these pages, so copying them
++  // before everything else in it gives the same result, and the render pass
++  // (and on tiled GPUs, the tile loads and stores around it) stays open.
++  const bool hoist = upload_hoistable_ && REXCVAR_GET(vulkan_hoist_uploads);
++  if (!hoist) {
++    // upload_page_ranges are sorted, use them to determine the range for the
++    // ordering barrier.
++    Use(Usage::kTransferDestination,
+       std::make_pair(upload_page_ranges.front().first << page_size_log2(),
+                      (upload_page_ranges.back().first + upload_page_ranges.back().second -
+                       upload_page_ranges.front().first)
+                          << page_size_log2()));
+-  command_processor_.SubmitBarriers(true);
+-  DeferredCommandBuffer& command_buffer = command_processor_.deferred_command_buffer();
+-  uint64_t submission_current = command_processor_.GetCurrentSubmission();
++    command_processor_.SubmitBarriers(true);
++  }
++  auto copy = [&](VkBuffer src_buffer) {
++    if (hoist) {
++      command_buffer.CmdVkCopyBufferPrologue(src_buffer, buffer_,
++                                             uint32_t(upload_regions_.size()),
++                                             upload_regions_.data());
++    } else {
++      command_buffer.CmdVkCopyBuffer(src_buffer, buffer_, uint32_t(upload_regions_.size()),
++                                     upload_regions_.data());
++    }
++    upload_regions_.clear();
++  };
+   bool successful = true;
+   upload_regions_.clear();
+   VkBuffer upload_buffer_previous = VK_NULL_HANDLE;
+@@ -306,9 +328,7 @@ bool VulkanSharedMemory::UploadRanges(
+                   upload_buffer_size);
+       if (upload_buffer_previous != upload_buffer && !upload_regions_.empty()) {
+         assert_true(upload_buffer_previous != VK_NULL_HANDLE);
+-        command_buffer.CmdVkCopyBuffer(upload_buffer_previous, buffer_,
+-                                       uint32_t(upload_regions_.size()), upload_regions_.data());
+-        upload_regions_.clear();
++        copy(upload_buffer_previous);
+       }
+       upload_buffer_previous = upload_buffer;
+       VkBufferCopy& upload_region = upload_regions_.emplace_back();
+@@ -325,9 +345,7 @@ bool VulkanSharedMemory::UploadRanges(
+   }
+   if (!upload_regions_.empty()) {
+     assert_true(upload_buffer_previous != VK_NULL_HANDLE);
+-    command_buffer.CmdVkCopyBuffer(upload_buffer_previous, buffer_,
+-                                   uint32_t(upload_regions_.size()), upload_regions_.data());
+-    upload_regions_.clear();
++    copy(upload_buffer_previous);
+   }
+   return successful;
+ }
 diff --git a/src/rexglue/CMakeLists.txt b/src/rexglue/CMakeLists.txt
 index 5de4b70..f4c019e 100644
 --- a/src/rexglue/CMakeLists.txt
@@ -1533,8 +2178,41 @@ index 0000000..303649b
 +
 +}  // namespace ui
 +}  // namespace rex
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 8197bb4..079d11e 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -480,6 +480,19 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+ 
+   device->queue_families_[device->queue_family_graphics_compute_].queues.resize(std::max(
+       size_t(1), device->queue_families_[device->queue_family_graphics_compute_].queues.size()));
++#if REX_PLATFORM_ANDROID
++  // A second queue for vkQueuePresentKHR. On Android it can block for a frame
++  // in BufferQueue while holding the queue, and with one queue the GPU command
++  // processor's vkQueueSubmit waits behind it, so emulation and the host GPU
++  // take turns instead of overlapping.
++  {
++    QueueFamily& graphics_family = device->queue_families_[device->queue_family_graphics_compute_];
++    if (with_swapchain && graphics_family.may_support_presentation &&
++        queue_families[device->queue_family_graphics_compute_].queueCount >= 2) {
++      graphics_family.queues.resize(std::max(size_t(2), graphics_family.queues.size()));
++    }
++  }
++#endif
+   if (device->queue_family_sparse_binding_ != UINT32_MAX) {
+     device->queue_families_[device->queue_family_sparse_binding_].queues.resize(std::max(
+         size_t(1), device->queue_families_[device->queue_family_sparse_binding_].queues.size()));
+@@ -613,6 +626,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   XE_UI_VULKAN_LIMIT(minStorageBufferOffsetAlignment)
+   XE_UI_VULKAN_LIMIT(maxFramebufferWidth)
+   XE_UI_VULKAN_LIMIT(maxFramebufferHeight)
++  XE_UI_VULKAN_LIMIT(timestampComputeAndGraphics)
++  XE_UI_VULKAN_LIMIT(timestampPeriod)
+   XE_UI_VULKAN_ENUM_LIMIT(framebufferColorSampleCounts, SampleCountFlags)
+   XE_UI_VULKAN_ENUM_LIMIT(framebufferDepthSampleCounts, SampleCountFlags)
+   XE_UI_VULKAN_ENUM_LIMIT(framebufferStencilSampleCounts, SampleCountFlags)
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
-index 110e310..ffccf1b 100644
+index 110e310..e19c6ba 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
 +++ b/src/ui/vulkan/vulkan_presenter.cpp
 @@ -1855,6 +1855,11 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
@@ -1549,6 +2227,17 @@ index 110e310..ffccf1b 100644
              }
            }
          }
+@@ -2254,7 +2259,9 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
+   VkResult present_result;
+   {
+     const VulkanDevice::Queue::Acquisition queue_acquisition =
+-        vulkan_device_->AcquireQueue(paint_context_.present_queue_family, 0);
++        vulkan_device_->AcquireQueue(
++            paint_context_.present_queue_family,
++            vulkan_device_->GetPresentQueueIndex(paint_context_.present_queue_family));
+     present_result = dfn.vkQueuePresentKHR(queue_acquisition.queue(), &present_info);
+   }
+   switch (present_result) {
 diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
 index 513cfb4..ef911b7 100644
 --- a/src/ui/window_sdl.cpp
