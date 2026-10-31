@@ -33,7 +33,16 @@ void PauseFenceSpin(bool waiting) {
     streak = 0;
     return;
   }
-  if (++streak < 32) {
+  // On Android only yield: sleeping wakes late on every fence and lets the
+  // cores clock down, which costs about a sixth of the frame rate (35 vs
+  // 41 fps on a Snapdragon 8 Gen 2). Yielding still frees the core for the
+  // threads the wait depends on.
+#if defined(__ANDROID__)
+  constexpr uint32_t kYieldsBeforeSleep = UINT32_MAX;
+#else
+  constexpr uint32_t kYieldsBeforeSleep = 32;
+#endif
+  if (++streak < kYieldsBeforeSleep) {
     std::this_thread::yield();
     return;
   }
