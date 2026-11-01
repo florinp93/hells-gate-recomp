@@ -11,6 +11,8 @@
 #include <rex/ppc.h>
 #include <rex/runtime.h>
 
+#include <algorithm>
+#include <cstring>
 #include <csetjmp>
 #include <cstdint>
 
@@ -81,4 +83,39 @@ inline void UltrawideAspectHook(rex::ppc::Register& f0) {
                 g_ultrawide_target_aspect);
     f0.f64 = g_ultrawide_target_aspect;
   }
+}
+
+// Guest virtual memory, set before the game starts (OnPreLaunchModule).
+inline uint8_t* g_guest_membase = nullptr;
+
+// Render size override, 0 = the game's own choice (1280x720 on an HD output).
+inline uint32_t g_render_width = 0;
+inline uint32_t g_render_height = 0;
+
+// Runs in the display-mode init (0x824D6B94) after the size globals are
+// written and before the back buffer size (r30 x r29) goes into the D3D
+// present parameters. The game sizes its surfaces, viewports and resolves from
+// these, so drawing at e.g. 960x540 needs nothing else; the presenter then
+// upscales the smaller front buffer (SGSR when chosen). Larger than 1280x720
+// overflows the 10 MB EDRAM and corrupts the picture, so it's refused.
+inline void RenderSizeHook(rex::ppc::Register& r29, rex::ppc::Register& r30) {
+  if (!g_render_width || !g_render_height || !g_guest_membase) return;
+  // Only the HD path; standard-definition outputs keep the game's sizes.
+  if ((r30.u32 & 0xFFFF) != 1280 || (r29.u32 & 0xFFFF) != 720) return;
+  uint32_t width = std::clamp<uint32_t>(g_render_width, 320, 1280);
+  uint32_t height = std::clamp<uint32_t>(g_render_height, 180, 720);
+  if (width == 1280 && height == 720) return;
+  auto store16 = [](uint32_t address, uint32_t value) {
+    uint16_t be = __builtin_bswap16(uint16_t(value));
+    std::memcpy(g_guest_membase + address, &be, sizeof(be));
+  };
+  REXLOG_INFO("RENDER SIZE: {}x{} -> {}x{}", r30.u32 & 0xFFFF, r29.u32 & 0xFFFF, width, height);
+  // Back buffer: the present parameters (from r30/r29) and its globals.
+  r30.u64 = width;
+  r29.u64 = height;
+  store16(0x82C98740, width);
+  store16(0x82C98744, height);
+  // Output size: the front buffer the presenter receives.
+  store16(0x82C9875C, width);
+  store16(0x82C98760, height);
 }

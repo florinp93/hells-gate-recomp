@@ -31,9 +31,19 @@ Xenos Vulkan plugin (`librexgpu-xenos.so`); the Windows-only native renderer is 
 - **Import saves** copies saves from the PC build's `Documents\dantes_inferno` or Xenia's `content`
   folder (anything containing a `454108CF` folder). **Export saves** backs them up.
 - On-screen touch controller (Xbox layout) with a hide/show toggle; physical gamepads also work.
-- Launcher options: FPS counter, 30 fps lock, experimental render passes, experimental fast memory
-  tracking (known to cause graphics glitches), and a diagnostics profiler.
-- Every run writes a log to `Download/HellsGate/` with performance and crash information.
+- Launcher options: FPS counter, 30 fps lock, aspect ratio, upscaler, experimental render passes,
+  experimental fast memory tracking (known to cause graphics glitches), and a diagnostics profiler.
+- Upscaler: the game draws 720p; Bilinear stretches it, SGSR (Snapdragon Game Super Resolution 1)
+  sharpens edges in one pass, and SGSR 2 adds temporal accumulation. The presenter has no depth,
+  motion vectors or camera jitter, so SGSR 2 here runs with zero motion and a strictly clamped
+  history: it steadies edges but can't recover extra detail the way it does in engines that jitter.
+- Render quality: the size the game draws at, filled to the screen by the upscaler. Performance
+  960x540, Balanced 1133x637, Quality 1280x720 (the game's own size, default), Ultra Quality
+  2560x720 (about 40 fps; pair it with the 30 fps lock). Below 720p a hook in the game's
+  display-mode init (`RenderSizeHook`) changes its back buffer size. The gain is modest: on a
+  Snapdragon 8 Gen 2, 960x540 cut GPU time by about 12%, because the game's many small render
+  passes cost per pass, not per pixel. The game can't draw above 1280x720 itself (its 10 MB EDRAM
+  overflows), so Ultra Quality uses the emulator's whole-step scaling instead.
 
 ## Known issues
 

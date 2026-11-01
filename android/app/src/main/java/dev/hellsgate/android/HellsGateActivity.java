@@ -76,6 +76,14 @@ public class HellsGateActivity extends SDLActivity {
                 // Wider than 16:9 widens the game's view and fills the screen to that shape.
                 "--ultrawide_target_aspect="
                         + String.format(java.util.Locale.ROOT, "%.4f", GamePaths.targetAspect(this)),
+                // Upscaling from the game's 720p frame to the screen: bilinear, or Snapdragon
+                // Game Super Resolution 1 (spatial) or 2 (temporal).
+                "--present_effect=" + GamePaths.presentEffect(this),
+                "--present_sgsr_edge_sharpness=" + GamePaths.sgsrSharpness(this),
+                // Render quality: the game's draw size, then whole-step scaling for Ultra Quality.
+                "--render_resolution=" + GamePaths.renderResolution(this),
+                "--draw_resolution_scale_x=" + GamePaths.renderScale(this)[0],
+                "--draw_resolution_scale_y=" + GamePaths.renderScale(this)[1],
         };
     }
 }

@@ -107,27 +107,17 @@ public class LauncherActivity extends Activity {
                 GamePaths.prefs(this).edit().putBoolean("lock_30fps", on).apply());
         root.addView(fps30Box);
 
-        TextView aspectLabel = new TextView(this);
-        aspectLabel.setText("Aspect ratio (wider than 16:9 widens the view to fill the screen)");
-        aspectLabel.setTextColor(Color.WHITE);
-        aspectLabel.setPadding(0, pad / 2, 0, 0);
-        root.addView(aspectLabel);
+        addChoice(root, pad, "Aspect ratio (wider than 16:9 widens the view to fill the screen)",
+                "aspect", GamePaths.ASPECT_OPTIONS, GamePaths.ASPECT_AUTO);
 
-        android.widget.RadioGroup aspectGroup = new android.widget.RadioGroup(this);
-        aspectGroup.setOrientation(LinearLayout.HORIZONTAL);
-        String currentAspect = GamePaths.prefs(this).getString("aspect", GamePaths.ASPECT_AUTO);
-        for (String option : GamePaths.ASPECT_OPTIONS) {
-            android.widget.RadioButton button = new android.widget.RadioButton(this);
-            button.setText(option);
-            button.setTextColor(Color.WHITE);
-            button.setId(View.generateViewId());
-            aspectGroup.addView(button);
-            if (option.equals(currentAspect)) button.setChecked(true);
-            button.setOnCheckedChangeListener((b, on) -> {
-                if (on) GamePaths.prefs(this).edit().putString("aspect", option).apply();
-            });
-        }
-        root.addView(aspectGroup);
+        addChoice(root, pad, "Upscaler (SGSR 2 is temporal: steadier edges; SGSR is sharper)",
+                "upscaler", GamePaths.UPSCALER_OPTIONS, GamePaths.UPSCALER_OFF);
+        addChoice(root, pad, "Render quality (Performance 960x540, Balanced 1133x637, "
+                + "Quality 1280x720, Ultra Quality 2560x720 at about 40 fps; the upscaler fills "
+                + "the screen)",
+                "render_quality", GamePaths.QUALITY_OPTIONS, GamePaths.QUALITY_DEFAULT);
+        addChoice(root, pad, "SGSR sharpness", "sgsr_sharpness", GamePaths.SHARPNESS_OPTIONS,
+                GamePaths.SHARPNESS_DEFAULT);
 
         android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
         rpBox.setText("Faster rendering (experimental: classic render passes; "
@@ -199,6 +189,32 @@ public class LauncherActivity extends Activity {
             status.setText(ready ? "Game imported. Ready to play."
                                  : "No game imported yet.");
         }
+    }
+
+    /** A label and a row of radio buttons stored as the string preference {@code key}. */
+    private void addChoice(LinearLayout root, int pad, String label, String key, String[] options,
+            String defaultOption) {
+        TextView labelView = new TextView(this);
+        labelView.setText(label);
+        labelView.setTextColor(Color.WHITE);
+        labelView.setPadding(0, pad / 2, 0, 0);
+        root.addView(labelView);
+
+        android.widget.RadioGroup group = new android.widget.RadioGroup(this);
+        group.setOrientation(LinearLayout.HORIZONTAL);
+        String current = GamePaths.prefs(this).getString(key, defaultOption);
+        for (String option : options) {
+            android.widget.RadioButton button = new android.widget.RadioButton(this);
+            button.setText(option);
+            button.setTextColor(Color.WHITE);
+            button.setId(View.generateViewId());
+            group.addView(button);
+            if (option.equals(current)) button.setChecked(true);
+            button.setOnCheckedChangeListener((b, on) -> {
+                if (on) GamePaths.prefs(this).edit().putString(key, option).apply();
+            });
+        }
+        root.addView(group);
     }
 
     private void pickFolder() {

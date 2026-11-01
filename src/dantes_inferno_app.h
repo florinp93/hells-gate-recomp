@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+
 #include "overlay/achievement_sound.h"
 #include "path_util.h"
 #include "overlay/achievement_ui.h"
@@ -56,6 +58,10 @@ REXCVAR_DEFINE_BOOL(achievement_preview, false, "UI",
 REXCVAR_DEFINE_STRING(glyph_family, "auto", "UI",
                       "Button glyphs: auto (follow the controller in use), xbox360, playstation4, "
                       "playstation5 or keyboard");
+
+REXCVAR_DEFINE_STRING(render_resolution, "", "Graphics",
+                      "Game render size WxH up to 1280x720, e.g. 960x540 (empty = 1280x720)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_DOUBLE(ultrawide_target_aspect, 0.0, "Graphics",
                       "Target aspect ratio for ultrawide (0=disabled, 1.7778=16:9, "
@@ -160,6 +166,13 @@ class DantesInfernoApp : public rex::ReXApp {
 
     double target_aspect = REXCVAR_GET(ultrawide_target_aspect);
     if (target_aspect > 0.0) g_ultrawide_target_aspect = static_cast<float>(target_aspect);
+    {
+      unsigned w = 0, h = 0;
+      if (std::sscanf(REXCVAR_GET(render_resolution).c_str(), "%ux%u", &w, &h) == 2) {
+        g_render_width = w;
+        g_render_height = h;
+      }
+    }
     REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
   }
 
@@ -191,6 +204,7 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnPreLaunchModule() override {
     uint8_t* membase = runtime()->memory()->virtual_membase();
+    g_guest_membase = membase;
 
     if (rex::memory::load_and_swap<uint32_t>(membase + 0x82879110) != 0x3C8082CEu) {
       auto msg = fmt::format(
