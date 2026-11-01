@@ -39,6 +39,7 @@ endif()
 
 set(DANTESINFERNO_SOURCES
     src/main.cpp
+    src/asset_hooks.cpp
     src/audio_hooks.cpp
     src/damage_hooks.cpp
     src/fence_wait_hooks.cpp

@@ -50,6 +50,9 @@ inline float LoadFloat(const uint8_t* base, uint32_t address) {
   return value;
 }
 
+inline void Store8(uint8_t* base, uint32_t address, uint8_t value) {
+  *Ptr(base, address) = value;
+}
 inline void Store16(uint8_t* base, uint32_t address, uint16_t value) {
   value = __builtin_bswap16(value);
   std::memcpy(Ptr(base, address), &value, sizeof(value));
