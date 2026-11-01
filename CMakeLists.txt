@@ -76,6 +76,10 @@ if(NOT DANTESINFERNO_NATIVE_RENDERER)
     endif()
 endif()
 
+if(ANDROID)
+    list(APPEND DANTESINFERNO_SOURCES src/android_vulkan_driver.cpp)
+endif()
+
 if(WIN32)
     list(APPEND DANTESINFERNO_SOURCES src/dantes_inferno.rc)
     add_executable(dantes_inferno WIN32 ${DANTESINFERNO_SOURCES})
@@ -91,6 +95,15 @@ else()
 endif()
 
 rexglue_setup_target(dantes_inferno)
+if(ANDROID)
+    # Custom Vulkan drivers (Turnip). Builds libadrenotools statically into
+    # libmain.so plus its hook libraries (libhook_impl.so, libmain_hook.so,
+    # libfile_redirect_hook.so), which must ship next to libmain.so.
+    set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
+    add_subdirectory(thirdparty/libadrenotools EXCLUDE_FROM_ALL)
+    target_link_libraries(dantes_inferno PRIVATE adrenotools)
+    add_dependencies(dantes_inferno main_hook file_redirect_hook hook_impl)
+endif()
 if(DANTESINFERNO_DEV_CHEATS)
     target_compile_definitions(dantes_inferno PRIVATE DANTESINFERNO_DEV_CHEATS)
 endif()

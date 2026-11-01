@@ -23,6 +23,7 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_PICK_FOLDER = 1;
     private static final int REQUEST_IMPORT_SAVES = 2;
     private static final int REQUEST_EXPORT_SAVES = 3;
+    private static final int REQUEST_IMPORT_DRIVER = 4;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -34,6 +35,7 @@ public class LauncherActivity extends Activity {
     private Button cancelButton;
     private Button importSavesButton;
     private Button exportSavesButton;
+    private TextView driverLabel;
     private volatile boolean importing;
 
     @Override
@@ -118,6 +120,31 @@ public class LauncherActivity extends Activity {
                 "render_quality", GamePaths.QUALITY_OPTIONS, GamePaths.QUALITY_DEFAULT);
         addChoice(root, pad, "SGSR sharpness", "sgsr_sharpness", GamePaths.SHARPNESS_OPTIONS,
                 GamePaths.SHARPNESS_DEFAULT);
+
+        driverLabel = new TextView(this);
+        driverLabel.setTextColor(Color.WHITE);
+        driverLabel.setPadding(0, pad / 2, 0, 0);
+        root.addView(driverLabel);
+        LinearLayout driverRow = new LinearLayout(this);
+        driverRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button importDriverButton = new Button(this);
+        importDriverButton.setText("Import driver (.zip)");
+        importDriverButton.setOnClickListener(v -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            startActivityForResult(intent, REQUEST_IMPORT_DRIVER);
+        });
+        driverRow.addView(importDriverButton);
+        Button systemDriverButton = new Button(this);
+        systemDriverButton.setText("Use system driver");
+        systemDriverButton.setOnClickListener(v -> {
+            GpuDriver.useSystem(this);
+            updateDriverLabel();
+        });
+        driverRow.addView(systemDriverButton);
+        root.addView(driverRow);
+        updateDriverLabel();
 
         android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
         rpBox.setText("Faster rendering (experimental: classic render passes; "
@@ -217,6 +244,12 @@ public class LauncherActivity extends Activity {
         root.addView(group);
     }
 
+    private void updateDriverLabel() {
+        driverLabel.setText("GPU driver: " + GpuDriver.describe(this)
+                + "\n(Turnip is Mesa's open-source Adreno driver: import its .zip to try it. "
+                + "If the game won't start or draws wrongly, tap Use system driver.)");
+    }
+
     private void pickFolder() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         startActivityForResult(intent, REQUEST_PICK_FOLDER);
@@ -228,6 +261,24 @@ public class LauncherActivity extends Activity {
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         if (requestCode == REQUEST_PICK_FOLDER) {
             startImport(data.getData());
+        } else if (requestCode == REQUEST_IMPORT_DRIVER) {
+            final Uri file = data.getData();
+            status.setText("Importing GPU driver...");
+            new Thread(() -> {
+                String msg;
+                try {
+                    msg = GpuDriver.importFrom(this, file);
+                } catch (Exception e) {
+                    msg = "Driver import failed: "
+                            + (e.getMessage() != null ? e.getMessage() : e.toString());
+                }
+                DiagLog.line("GPU driver: " + msg);
+                final String m = msg;
+                ui.post(() -> {
+                    status.setText(m);
+                    updateDriverLabel();
+                });
+            }, "driver-import").start();
         } else if (requestCode == REQUEST_IMPORT_SAVES || requestCode == REQUEST_EXPORT_SAVES) {
             final boolean export = requestCode == REQUEST_EXPORT_SAVES;
             final Uri tree = data.getData();

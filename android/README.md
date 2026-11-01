@@ -16,12 +16,15 @@ Xenos Vulkan plugin (`librexgpu-xenos.so`); the Windows-only native renderer is 
    -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared -DDANTESINFERNO_NATIVE_RENDERER=OFF
    -DDANTESINFERNO_BUILD_LAUNCHER=OFF -DDANTESINFERNO_FIDELITYFX=OFF -DREXGLUE_ENABLE_TRACY=OFF
    -DREXGLUE_HOST_CLI=<host rexglue>`
-   and build the `dantes_inferno` and `rexgpu-xenos` targets.
+   and build the `dantes_inferno`, `rexgpu-xenos`, `main_hook`, `file_redirect_hook` and
+   `hook_impl` targets (the last three are libadrenotools' hook libraries, under
+   `thirdparty/libadrenotools/src/hook/` in the build folder).
 4. Build the diagnostics helper:
    `<ndk>/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang -shared -fPIC -O1
    -o <dir>/arm64-v8a/libcrashlog.so android/crashlog/crashlog.c -llog -ldl`.
 5. Put `libmain.so`, `librexruntime.so`, `librexgpu-xenos.so`, `libSDL3.so`, `libc++_shared.so`
-   (and `libcrashlog.so`) in `<dir>/arm64-v8a/`, then in `android/` run
+   `libmain_hook.so`, `libfile_redirect_hook.so`, `libhook_impl.so` (and `libcrashlog.so`) in
+   `<dir>/arm64-v8a/`, then in `android/` run
    `gradle assembleDebug -PnativeLibs=<dir> -PsdlJava=<SDL>/android-project/app/src/main/java`.
 
 ## Use
@@ -44,6 +47,13 @@ Xenos Vulkan plugin (`librexgpu-xenos.so`); the Windows-only native renderer is 
   Snapdragon 8 Gen 2, 960x540 cut GPU time by about 12%, because the game's many small render
   passes cost per pass, not per pixel. The game can't draw above 1280x720 itself (its 10 MB EDRAM
   overflows), so Ultra Quality uses the emulator's whole-step scaling instead.
+- GPU driver: **Import driver (.zip)** loads a custom Vulkan driver such as Mesa Turnip (Adreno 6xx
+  to 8xx) in place of the system driver, using
+  [libadrenotools](https://github.com/bylaws/libadrenotools) (vendored in
+  `thirdparty/libadrenotools`); no root needed. It takes the driver zips published for Android
+  emulators (a `meta.json` naming the `.so`), a zip with one `.so`, or a bare `.so`. The driver is
+  copied to internal storage and passed as `--vulkan_custom_driver`. If it fails to load, the game
+  logs it and uses the system driver; if it loads but misbehaves, tap **Use system driver**.
 
 ## Known issues
 

@@ -46,7 +46,7 @@ public class HellsGateActivity extends SDLActivity {
         // The SDK defaults to <executable folder>/logs, which is the read-only native lib dir.
         java.io.File logs = new java.io.File(GamePaths.root(this), "logs");
         logs.mkdirs();
-        return new String[] {
+        java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
                 "--game_data_root=" + GamePaths.game(this).getAbsolutePath(),
                 "--user_data_root=" + GamePaths.userData(this).getAbsolutePath(),
                 "--cache_root=" + GamePaths.cache(this).getAbsolutePath(),
@@ -83,7 +83,11 @@ public class HellsGateActivity extends SDLActivity {
                 // Render quality: the game's draw size, then whole-step scaling for Ultra Quality.
                 "--render_resolution=" + GamePaths.renderResolution(this),
                 "--draw_resolution_scale_x=" + GamePaths.renderScale(this)[0],
-                "--draw_resolution_scale_y=" + GamePaths.renderScale(this)[1],
-        };
+                "--draw_resolution_scale_y=" + GamePaths.renderScale(this)[1]));
+        // Custom Vulkan driver (Turnip) loaded with libadrenotools. Only passed when one is
+        // imported: an empty value would swallow the next argument.
+        java.io.File driver = GpuDriver.library(this);
+        if (driver != null) args.add("--vulkan_custom_driver=" + driver.getAbsolutePath());
+        return args.toArray(new String[0]);
     }
 }

@@ -161,6 +161,32 @@ index e90418d..b4fed73 100644
  //=============================================================================
  // Compiler Polyfills
  //=============================================================================
+diff --git a/include/rex/platform/dynlib.h b/include/rex/platform/dynlib.h
+index e3fc40d..bf8bd04 100644
+--- a/include/rex/platform/dynlib.h
++++ b/include/rex/platform/dynlib.h
+@@ -32,6 +32,13 @@ class DynamicLibrary {
+ 
+   bool Load(const std::filesystem::path& path, SymbolResolution mode = SymbolResolution::kLazy);
+   void Close();
++  // Uses a handle opened elsewhere (for example by a custom driver loader). It
++  // is not closed by this object.
++  void AdoptUnowned(void* handle) {
++    Close();
++    handle_ = handle;
++    owned_ = false;
++  }
+   explicit operator bool() const { return handle_ != nullptr; }
+ 
+   void* GetRawSymbol(const char* name) const;
+@@ -43,6 +50,7 @@ class DynamicLibrary {
+ 
+  private:
+   void* handle_ = nullptr;
++  bool owned_ = true;
+ };
+ 
+ namespace lib_names {
 diff --git a/include/rex/string/numeric.h b/include/rex/string/numeric.h
 index 85994c7..9675532 100644
 --- a/include/rex/string/numeric.h
@@ -461,6 +487,26 @@ index aa55a4a..c8bb914 100644
  XE_UI_VULKAN_FUNCTION(vkInvalidateMappedMemoryRanges)
  XE_UI_VULKAN_FUNCTION(vkMapMemory)
  XE_UI_VULKAN_FUNCTION(vkResetCommandPool)
+diff --git a/include/rex/ui/vulkan/instance.h b/include/rex/ui/vulkan/instance.h
+index 4edde2b..f3b7dc6 100644
+--- a/include/rex/ui/vulkan/instance.h
++++ b/include/rex/ui/vulkan/instance.h
+@@ -22,6 +22,15 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++#if REX_PLATFORM_ANDROID
++// Lets the app supply the Vulkan library, for example a custom driver loaded
++// with libadrenotools. The function returns a dlopen handle exposing
++// vkGetInstanceProcAddr, or null to use the system libvulkan.so. The handle is
++// never closed by the SDK, so return the same one on every call.
++using AndroidVulkanLoaderOverride = void* (*)();
++void SetAndroidVulkanLoaderOverride(AndroidVulkanLoaderOverride override_function);
++#endif
++
+ class VulkanInstance {
+  public:
+   static std::unique_ptr<VulkanInstance> Create(bool with_surface, bool try_enable_validation);
 diff --git a/include/rex/ui/vulkan/presenter.h b/include/rex/ui/vulkan/presenter.h
 index 56ee43b..47defe7 100644
 --- a/include/rex/ui/vulkan/presenter.h
@@ -620,6 +666,45 @@ index 1ddafd0..29fcec5 100644
  elseif(UNIX)
      target_link_libraries(rexcore PRIVATE pthread rt dl)
  endif()
+diff --git a/src/core/dynlib_posix.cpp b/src/core/dynlib_posix.cpp
+index fcfd6c9..070e301 100644
+--- a/src/core/dynlib_posix.cpp
++++ b/src/core/dynlib_posix.cpp
+@@ -11,7 +11,8 @@ DynamicLibrary::~DynamicLibrary() {
+   Close();
+ }
+ 
+-DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept : handle_(other.handle_) {
++DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept
++    : handle_(other.handle_), owned_(other.owned_) {
+   other.handle_ = nullptr;
+ }
+ 
+@@ -19,6 +20,7 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
+   if (this != &other) {
+     Close();
+     handle_ = other.handle_;
++    owned_ = other.owned_;
+     other.handle_ = nullptr;
+   }
+   return *this;
+@@ -28,13 +30,15 @@ bool DynamicLibrary::Load(const std::filesystem::path& path, SymbolResolution mo
+   Close();
+   int flags = (mode == SymbolResolution::kImmediate) ? RTLD_NOW : RTLD_LAZY;
+   handle_ = dlopen(path.c_str(), flags);
++  owned_ = true;
+   return handle_ != nullptr;
+ }
+ 
+ void DynamicLibrary::Close() {
+   if (handle_) {
+-    dlclose(handle_);
++    if (owned_) dlclose(handle_);
+     handle_ = nullptr;
++    owned_ = true;
+   }
+ }
+ 
 diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
 index 8b1c76a..e9f0d18 100644
 --- a/src/core/exception_handler_posix.cpp
@@ -3534,6 +3619,46 @@ index 8197bb4..079d11e 100644
    XE_UI_VULKAN_ENUM_LIMIT(framebufferColorSampleCounts, SampleCountFlags)
    XE_UI_VULKAN_ENUM_LIMIT(framebufferDepthSampleCounts, SampleCountFlags)
    XE_UI_VULKAN_ENUM_LIMIT(framebufferStencilSampleCounts, SampleCountFlags)
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 914b311..81dc304 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -31,6 +31,16 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++#if REX_PLATFORM_ANDROID
++namespace {
++AndroidVulkanLoaderOverride android_vulkan_loader_override = nullptr;
++}  // namespace
++
++void SetAndroidVulkanLoaderOverride(AndroidVulkanLoaderOverride override_function) {
++  android_vulkan_loader_override = override_function;
++}
++#endif
++
+ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+                                                        const bool try_enable_validation) {
+   std::unique_ptr<VulkanInstance> vulkan_instance(new VulkanInstance());
+@@ -75,7 +85,17 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+     return nullptr;
+   }
+ #else
+-  loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
++#if REX_PLATFORM_ANDROID
++  if (android_vulkan_loader_override) {
++    if (void* handle = android_vulkan_loader_override()) {
++      vulkan_instance->loader_.AdoptUnowned(handle);
++      loader_loaded = true;
++      REXLOG_INFO("Vulkan: using the app-supplied driver");
++    }
++  }
++  if (!loader_loaded)
++#endif
++    loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
+   if (!loader_loaded) {
+     REXLOG_ERROR("Failed to load {}", platform::lib_names::kVulkanLoader);
+     return nullptr;
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
 index 110e310..6d22ebc 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
