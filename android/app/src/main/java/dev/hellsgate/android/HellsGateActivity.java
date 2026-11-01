@@ -79,11 +79,7 @@ public class HellsGateActivity extends SDLActivity {
                 // Upscaling from the game's 720p frame to the screen: bilinear, or Snapdragon
                 // Game Super Resolution 1 (spatial) or 2 (temporal).
                 "--present_effect=" + GamePaths.presentEffect(this),
-                "--present_sgsr_edge_sharpness=" + GamePaths.sgsrSharpness(this),
-                // Render quality: the game's draw size, then whole-step scaling for Ultra Quality.
-                "--render_resolution=" + GamePaths.renderResolution(this),
-                "--draw_resolution_scale_x=" + GamePaths.renderScale(this)[0],
-                "--draw_resolution_scale_y=" + GamePaths.renderScale(this)[1]));
+                "--present_sgsr_edge_sharpness=" + GamePaths.sgsrSharpness(this)));
         // Custom Vulkan driver (Turnip) loaded with libadrenotools. Only passed when one is
         // imported: an empty value would swallow the next argument.
         java.io.File driver = GpuDriver.library(this);

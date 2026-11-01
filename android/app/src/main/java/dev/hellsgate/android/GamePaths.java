@@ -53,34 +53,6 @@ final class GamePaths {
         }
     }
 
-    static final String QUALITY_DEFAULT = "Quality";
-    static final String[] QUALITY_OPTIONS = {"Performance", "Balanced", QUALITY_DEFAULT,
-            "Ultra Quality"};
-
-    /**
-     * The game's draw size ("--render_resolution") for the "render_quality" setting, as a share
-     * of a 1080p output: Performance 50% (960x540), Balanced 59% (1133x637), Quality 67% (the
-     * game's own 1280x720). The upscaler fills the screen from it. Never empty: an empty
-     * "--name=" argument swallows the argument after it.
-     */
-    static String renderResolution(Context context) {
-        switch (prefs(context).getString("render_quality", QUALITY_DEFAULT)) {
-            case "Performance": return "960x540";
-            case "Balanced": return "1133x637";
-            default: return "1280x720";
-        }
-    }
-
-    /**
-     * Draw resolution scale {x, y}. Ultra Quality draws twice as wide (2560x720): the game can't
-     * draw larger than 1280x720 itself (its 10 MB EDRAM overflows), but the emulator can scale it
-     * by whole steps.
-     */
-    static int[] renderScale(Context context) {
-        return "Ultra Quality".equals(prefs(context).getString("render_quality", QUALITY_DEFAULT))
-                ? new int[] {2, 1} : new int[] {1, 1};
-    }
-
     static final String ASPECT_AUTO = "Auto";
     static final String[] ASPECT_OPTIONS = {ASPECT_AUTO, "16:9", "20:9", "21:9"};
 

@@ -114,10 +114,6 @@ public class LauncherActivity extends Activity {
 
         addChoice(root, pad, "Upscaler (SGSR 2 is temporal: steadier edges; SGSR is sharper)",
                 "upscaler", GamePaths.UPSCALER_OPTIONS, GamePaths.UPSCALER_OFF);
-        addChoice(root, pad, "Render quality (Performance 960x540, Balanced 1133x637, "
-                + "Quality 1280x720, Ultra Quality 2560x720 at about 40 fps; the upscaler fills "
-                + "the screen)",
-                "render_quality", GamePaths.QUALITY_OPTIONS, GamePaths.QUALITY_DEFAULT);
         addChoice(root, pad, "SGSR sharpness", "sgsr_sharpness", GamePaths.SHARPNESS_OPTIONS,
                 GamePaths.SHARPNESS_DEFAULT);
 

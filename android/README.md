@@ -40,13 +40,9 @@ Xenos Vulkan plugin (`librexgpu-xenos.so`); the Windows-only native renderer is 
   sharpens edges in one pass, and SGSR 2 adds temporal accumulation. The presenter has no depth,
   motion vectors or camera jitter, so SGSR 2 here runs with zero motion and a strictly clamped
   history: it steadies edges but can't recover extra detail the way it does in engines that jitter.
-- Render quality: the size the game draws at, filled to the screen by the upscaler. Performance
-  960x540, Balanced 1133x637, Quality 1280x720 (the game's own size, default), Ultra Quality
-  2560x720 (about 40 fps; pair it with the 30 fps lock). Below 720p a hook in the game's
-  display-mode init (`RenderSizeHook`) changes its back buffer size. The gain is modest: on a
-  Snapdragon 8 Gen 2, 960x540 cut GPU time by about 12%, because the game's many small render
-  passes cost per pass, not per pixel. The game can't draw above 1280x720 itself (its 10 MB EDRAM
-  overflows), so Ultra Quality uses the emulator's whole-step scaling instead.
+- The game always draws at its own 1280x720. (`--render_resolution`, a hook in the game's
+  display-mode init, can lower it, but on a Snapdragon 8 Gen 2 960x540 only cut GPU time by about
+  12%, so the launcher no longer offers it.)
 - GPU driver: **Import driver (.zip)** loads a custom Vulkan driver such as Mesa Turnip (Adreno 6xx
   to 8xx) in place of the system driver, using
   [libadrenotools](https://github.com/bylaws/libadrenotools) (vendored in
