@@ -15,6 +15,21 @@ index 9b3cdf5..1ef6441 100644
  elseif(UNIX AND NOT APPLE)
      if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
          set(REX_PLATFORM "linux-amd64")
+diff --git a/include/rex/audio/xma/context.h b/include/rex/audio/xma/context.h
+index 8426798..8616367 100644
+--- a/include/rex/audio/xma/context.h
++++ b/include/rex/audio/xma/context.h
+@@ -299,6 +299,10 @@ class XmaContext {
+   // Loop subframe precision state
+   uint8_t loop_frame_output_limit_ = 0;
+   bool loop_start_skip_pending_ = false;
++  // Work() gave up on a context whose input never produced output (logged once).
++  bool stall_reported_ = false;
++  // Decode() skipped a frame whose size cannot fit the packet data (logged once).
++  bool bad_frame_reported_ = false;
+ 
+   // Start-padding realignment state. Attributes belong to the frame whose
+   // samples are still being assembled, so they land one decode after the frame
 diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
 index d876846..73f67ea 100644
 --- a/include/rex/chrono/chrono.h
@@ -632,6 +647,152 @@ index 1eef389..34fb93d 100644
        auto global_lock = global_critical_region_.Acquire();
        uint32_t client_callback = clients_[index].callback;
        uint32_t client_callback_arg = clients_[index].wrapped_callback_arg;
+diff --git a/src/audio/xma_context.cpp b/src/audio/xma_context.cpp
+index 4ee14f9..4cffc80 100644
+--- a/src/audio/xma_context.cpp
++++ b/src/audio/xma_context.cpp
+@@ -137,13 +137,36 @@ bool XmaContext::Work() {
+     return true;
+   }
+ 
++  // Corrupt input can keep the decoder busy without ever producing output (each
++  // frame fails, the read position cycles); bound it so the guest thread that
++  // kicked the context gets control back. A healthy stream needs one priming
++  // decode before output starts, so this never triggers on good data.
++  constexpr int kMaxDecodesWithoutOutput = 256;
++  int decodes_without_output = 0;
++
+   while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count) {
++    const size_t write_offset_before = output_rb.write_offset();
+     Decode(&data);
+     Consume(&output_rb, &data);
+ 
+     if (!data.IsAnyInputBufferValid() || data.error_status == 4) {
+       break;
+     }
++
++    if (output_rb.write_offset() != write_offset_before) {
++      decodes_without_output = 0;
++    } else if (++decodes_without_output >= kMaxDecodesWithoutOutput) {
++      if (!stall_reported_) {
++        stall_reported_ = true;
++        REXAPU_WARN("XmaContext {}: {} decodes produced no output (corrupt stream?); "
++                    "dropping the rest of its input",
++                    id(), kMaxDecodesWithoutOutput);
++      }
++      data.input_buffer_0_valid = 0;
++      data.input_buffer_1_valid = 0;
++      data.input_buffer_read_offset = kBitsPerPacketHeader;
++      break;
++    }
+   }
+ 
+   data.output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
+@@ -629,6 +652,30 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
+     packet_info.current_frame_size_ = static_cast<uint32_t>(frame_size);
+   }
+ 
++  // The frame is assembled from at most this packet and the next. A size from
++  // corrupt bits can be larger (up to 0x7FFE), and BitStream::Copy does not
++  // bounds-check, so it would read past input_buffer_. Skip to the next packet.
++  const uint32_t frame_bits_available =
++      (kBitsPerPacket - kBitsPerPacketHeader) * 2 - (relative_offset - kBitsPerPacketHeader);
++  if (packet_info.current_frame_size_ <= kBitsPerFrameHeader ||
++      packet_info.current_frame_size_ > frame_bits_available) {
++    if (!bad_frame_reported_) {
++      bad_frame_reported_ = true;
++      REXAPU_WARN("XmaContext {}: frame size {} bits at offset {} is impossible; skipping packet",
++                  id(), packet_info.current_frame_size_,
++                  static_cast<uint32_t>(data->input_buffer_read_offset));
++    }
++    carry_valid_ = false;
++    const uint32_t next_offset = GetNextPacketReadOffset(current_input_buffer, packet_index + 1,
++                                                         current_input_packet_count);
++    if (next_offset == kBitsPerPacketHeader) {
++      SwapInputBuffer(data);
++    } else {
++      data->input_buffer_read_offset = next_offset;
++    }
++    return;
++  }
++
+   BitStream stream(current_input_buffer, (packet_index + 1) * kBitsPerPacket);
+   stream.SetOffset(data->input_buffer_read_offset);
+ 
+@@ -722,10 +769,14 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
+   }
+ 
+   if (!packet_info.isLastFrameInPacket()) {
+-    const uint32_t next_frame_offset =
+-        (data->input_buffer_read_offset + bits_to_copy) % kBitsPerPacket;
+-    data->input_buffer_read_offset = (packet_index * kBitsPerPacket) + next_frame_offset;
+-    return;
++    const uint32_t next_frame_offset = data->input_buffer_read_offset + bits_to_copy;
++    if (next_frame_offset < (packet_index + 1u) * kBitsPerPacket) {
++      data->input_buffer_read_offset = next_frame_offset;
++      return;
++    }
++    // The packet header promises more frames, but this one runs past the end of
++    // the packet, so it is the last. Wrapping inside the packet (as a modulo
++    // would) lands mid-frame and can cycle over the same bits forever.
+   }
+ 
+   uint32_t next_input_offset =
+diff --git a/src/audio/xma_decoder.cpp b/src/audio/xma_decoder.cpp
+index a0a178d..7262a0a 100644
+--- a/src/audio/xma_decoder.cpp
++++ b/src/audio/xma_decoder.cpp
+@@ -22,6 +22,9 @@
+ #include <rex/system/thread_state.h>
+ #include <rex/system/xthread.h>
+ 
++#include <chrono>
++#include <mutex>
++
+ extern "C" {
+ #include "libavutil/log.h"
+ }  // extern "C"
+@@ -64,9 +67,40 @@ void av_log_callback(void* avcl, int level, const char* fmt, va_list va) {
+     return;
+   }
+ 
++  // A corrupt stream makes ffmpeg repeat the same complaint for every frame,
++  // hundreds of thousands of times a second; allow a burst per second and
++  // count the rest.
++  constexpr uint32_t kMaxMessagesPerSecond = 20;
++  static std::mutex rate_mutex;
++  static std::chrono::steady_clock::time_point window_start;
++  static uint32_t window_count = 0;
++  static uint64_t suppressed = 0;
++  {
++    std::lock_guard<std::mutex> lock(rate_mutex);
++    const auto now = std::chrono::steady_clock::now();
++    if (now - window_start >= std::chrono::seconds(1)) {
++      if (suppressed) {
++        REXAPU_WARN("ffmpeg: {} messages suppressed in the last second", suppressed);
++      }
++      window_start = now;
++      window_count = 0;
++      suppressed = 0;
++    }
++    if (++window_count > kMaxMessagesPerSecond) {
++      ++suppressed;
++      return;
++    }
++  }
++
+   string::StringBuffer buff;
+   buff.AppendVarargs(fmt, va);
+   auto msg = buff.to_string_view();
++  while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
++    msg.remove_suffix(1);
++  }
++  if (msg.empty()) {
++    return;
++  }
+ 
+   switch (level) {
+     case AV_LOG_ERROR:
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
 index 1ddafd0..29fcec5 100644
 --- a/src/core/CMakeLists.txt
@@ -987,6 +1148,32 @@ index ef5bdf4..a57b916 100644
  }
  
  bool Seek(FILE* file, int64_t offset, int origin) {
+diff --git a/src/core/logging.cpp b/src/core/logging.cpp
+index cbb5d72..8f84b67 100644
+--- a/src/core/logging.cpp
++++ b/src/core/logging.cpp
+@@ -17,6 +17,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include <spdlog/sinks/dup_filter_sink.h>
+ #include <spdlog/sinks/rotating_file_sink.h>
+ #include <spdlog/sinks/stdout_color_sinks.h>
+ 
+@@ -231,7 +232,12 @@ void InitLogging(const LogConfig& config) {
+         static_cast<size_t>(REXCVAR_GET(log_max_files)), false);
+     sink->set_level(spdlog::level::trace);
+     sink->set_pattern(config.file_pattern);
+-    g_file_sink = sink;
++    // Collapse runs of identical messages (a guest stuck calling the same bad
++    // pointer logs thousands per second) into one "Skipped N" line.
++    auto dedup = std::make_shared<spdlog::sinks::dup_filter_sink_mt>(std::chrono::seconds(5));
++    dedup->add_sink(sink);
++    dedup->set_level(spdlog::level::trace);
++    g_file_sink = dedup;
+   }
+ 
+   g_extra_sinks = config.extra_sinks;
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..01fcde9 100644
 --- a/src/core/memory_posix.cpp

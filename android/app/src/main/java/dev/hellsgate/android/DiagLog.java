@@ -147,11 +147,19 @@ final class DiagLog {
 
     private static void pumpLogcat() {
         try {
-            Process p = new ProcessBuilder("logcat", "-v", "threadtime").redirectErrorStream(true)
-                    .start();
+            // Info and up: framework Debug/Verbose tags (InputTransport logs every touch sample,
+            // InputMethodManager every input event) filled 95% of the file otherwise.
+            Process p = new ProcessBuilder("logcat", "-v", "threadtime", "*:I")
+                    .redirectErrorStream(true).start();
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String s;
-            while ((s = r.readLine()) != null) line(s);
+            while ((s = r.readLine()) != null) {
+                // threadtime format: "MM-DD HH:MM:SS.mmm  PID  TID P Tag: msg"; P at column 31.
+                if (overCap() && !(s.length() > 31 && (s.charAt(31) == 'E' || s.charAt(31) == 'F'))) {
+                    continue;
+                }
+                bulk(s);
+            }
         } catch (Throwable t) {
             line("logcat pump stopped: " + t);
         }
@@ -324,6 +332,7 @@ final class DiagLog {
             }
         }
         byte[] buf = new byte[16384];
+        java.io.ByteArrayOutputStream partial = new java.io.ByteArrayOutputStream();
         while (true) {
             try {
                 if (f.exists()) {
@@ -332,8 +341,13 @@ final class DiagLog {
                         r.seek(offset);
                         int n;
                         while ((n = r.read(buf)) > 0) {
-                            synchronized (DiagLog.class) {
-                                if (out != null) out.write(buf, 0, n);
+                            if (!overCap()) {
+                                synchronized (DiagLog.class) {
+                                    if (out != null) out.write(buf, 0, n);
+                                }
+                                bulkBytes += n;
+                            } else {
+                                filterTail(buf, n, partial);
                             }
                             offset += n;
                         }
@@ -346,6 +360,45 @@ final class DiagLog {
                 try { Thread.sleep(500); } catch (InterruptedException e) { return; }
             }
         }
+    }
+
+    /**
+     * Logcat and the SDK log copy stop being copied in full past this size; after that only
+     * error/critical lines get through. Crash traces from the native handler go to fd 2 directly
+     * and are never capped.
+     */
+    private static final long BULK_CAP = 64L << 20;
+    private static volatile long bulkBytes;
+    private static volatile boolean capNoted;
+
+    private static boolean overCap() {
+        if (bulkBytes < BULK_CAP) return false;
+        if (!capNoted) {
+            capNoted = true;
+            line("--- log reached " + (BULK_CAP >> 20)
+                    + " MB: from here only error/critical lines are copied ---");
+        }
+        return true;
+    }
+
+    private static void bulk(String s) {
+        bulkBytes += s.length() + 1;
+        line(s);
+    }
+
+    /** Past the cap: copy only complete SDK log lines tagged [error] or [critical]. */
+    private static void filterTail(byte[] buf, int n, java.io.ByteArrayOutputStream partial) {
+        int start = 0;
+        for (int i = 0; i < n; i++) {
+            if (buf[i] != '\n') continue;
+            partial.write(buf, start, i - start);
+            String l = new String(partial.toByteArray(), StandardCharsets.UTF_8);
+            partial.reset();
+            if (l.contains("] [error] [") || l.contains("] [critical] [")) line(l);
+            start = i + 1;
+        }
+        partial.write(buf, start, n - start);
+        if (partial.size() > 65536) partial.reset();  // runaway line without a newline
     }
 
     static synchronized void line(String s) {
