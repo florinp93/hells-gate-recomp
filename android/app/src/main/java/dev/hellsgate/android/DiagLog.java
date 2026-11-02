@@ -154,6 +154,9 @@ final class DiagLog {
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String s;
             while ((s = r.readLine()) != null) {
+                // Mesa drivers (Turnip) read their vendor.mesa.* options as system properties,
+                // which apps may not read: bionic warns twice per shader compile, ~800 lines a run.
+                if (s.contains("Access denied finding property")) continue;
                 // threadtime format: "MM-DD HH:MM:SS.mmm  PID  TID P Tag: msg"; P at column 31.
                 if (overCap() && !(s.length() > 31 && (s.charAt(31) == 'E' || s.charAt(31) == 'F'))) {
                     continue;
