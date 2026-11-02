@@ -42,6 +42,24 @@ final class GpuDriver {
         return GamePaths.prefs(context).getString("gpu_driver_name", "Custom driver");
     }
 
+    /**
+     * True when a custom driver is set and the last game run ended with a lost graphics device
+     * (a GPU hang or driver crash), read from the end of that run's SDK log.
+     */
+    static boolean lastRunLostDevice(Context context) {
+        if (library(context) == null) return false;
+        File log = new File(GamePaths.root(context), "logs/dantes_inferno.log");
+        try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(log, "r")) {
+            long start = Math.max(0, r.length() - 64 * 1024);
+            byte[] tail = new byte[(int) (r.length() - start)];
+            r.seek(start);
+            r.readFully(tail);
+            return new String(tail, "US-ASCII").contains("Graphics device lost");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     static void useSystem(Context context) {
         GamePaths.prefs(context).edit().remove("gpu_driver_library").remove("gpu_driver_name")
                 .apply();

@@ -4089,7 +4089,7 @@ index 0000000..303649b
 +}  // namespace ui
 +}  // namespace rex
 diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
-index 8197bb4..8b63bf2 100644
+index 8197bb4..6ee39ac 100644
 --- a/src/ui/vulkan/vulkan_device.cpp
 +++ b/src/ui/vulkan/vulkan_device.cpp
 @@ -480,6 +480,19 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
@@ -4121,7 +4121,24 @@ index 8197bb4..8b63bf2 100644
    device->properties_.deviceID = properties.deviceID;
    rex::string::copy_truncating(device->properties_.deviceName, properties.deviceName,
                                 sizeof(device->properties_.deviceName));
-@@ -613,6 +628,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+@@ -595,6 +610,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   XE_UI_VULKAN_LIMIT(maxImageDimensionCube)
+   XE_UI_VULKAN_LIMIT(maxImageArrayLayers)
+   XE_UI_VULKAN_LIMIT(maxStorageBufferRange)
++  // Turnip builds for Adreno 8xx (e.g. "Turnip Gen8") report 2 GB, which binds the guest's 512 MB
++  // shared memory as one storage buffer; on an Adreno 830 the GPU then hung (device lost) on the
++  // first frames of gameplay. Upstream Turnip reports 128 MB, and the split bindings that gives
++  // work on Turnip.
++  if (device->properties_.driverID == VK_DRIVER_ID_MESA_TURNIP &&
++      device->properties_.maxStorageBufferRange > (UINT32_C(1) << 27)) {
++    device->properties_.maxStorageBufferRange = UINT32_C(1) << 27;
++    REXLOG_INFO("  maxStorageBufferRange clamped to {} on Turnip",
++                device->properties_.maxStorageBufferRange);
++  }
+   XE_UI_VULKAN_LIMIT(maxSamplerAllocationCount)
+   XE_UI_VULKAN_LIMIT(maxPerStageDescriptorSamplers)
+   XE_UI_VULKAN_LIMIT(maxPerStageDescriptorStorageBuffers)
+@@ -613,6 +638,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
    XE_UI_VULKAN_LIMIT(minStorageBufferOffsetAlignment)
    XE_UI_VULKAN_LIMIT(maxFramebufferWidth)
    XE_UI_VULKAN_LIMIT(maxFramebufferHeight)

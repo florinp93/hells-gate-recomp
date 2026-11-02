@@ -137,6 +137,7 @@ public class LauncherActivity extends Activity {
         systemDriverButton.setOnClickListener(v -> {
             GpuDriver.useSystem(this);
             updateDriverLabel();
+            refresh();
         });
         driverRow.addView(systemDriverButton);
         root.addView(driverRow);
@@ -209,8 +210,12 @@ public class LauncherActivity extends Activity {
         importSavesButton.setEnabled(!importing);
         exportSavesButton.setEnabled(!importing);
         if (!importing) {
-            status.setText(ready ? "Game imported. Ready to play."
-                                 : "No game imported yet.");
+            String text = ready ? "Game imported. Ready to play." : "No game imported yet.";
+            if (GpuDriver.lastRunLostDevice(this)) {
+                text += "\nThe last run crashed: the GPU driver (" + GpuDriver.describe(this)
+                        + ") hung the GPU. If it happens again, tap Use system driver.";
+            }
+            status.setText(text);
         }
     }
 
