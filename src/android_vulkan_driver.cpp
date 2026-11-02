@@ -12,6 +12,7 @@
 #include <adrenotools/driver.h>
 
 #include <dlfcn.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 
 #include <filesystem>
@@ -21,6 +22,11 @@
 REXCVAR_DEFINE_STRING(vulkan_custom_driver, "", "Graphics",
                       "Android: path to a custom Vulkan driver .so (e.g. Turnip) to load with "
                       "libadrenotools; empty uses the system driver")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(vulkan_custom_driver_tu_debug, "", "Graphics",
+                      "Android: TU_DEBUG flags for a custom Turnip driver (e.g. sysmem,nolrz); Mesa "
+                      "reads the environment before its vendor.mesa.* properties, which apps can't read")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 // From rex/ui/vulkan/instance.h, which needs headers the game doesn't include.
@@ -49,6 +55,11 @@ void* OpenCustomDriver() {
     if (stat(driver.c_str(), &st) != 0) {
       REXLOG_ERROR("Vulkan driver: {} not found, using the system driver", driver);
       return;
+    }
+    const std::string tu_debug = REXCVAR_GET(vulkan_custom_driver_tu_debug);
+    if (!tu_debug.empty()) {
+      setenv("TU_DEBUG", tu_debug.c_str(), 1);
+      REXLOG_INFO("Vulkan driver: TU_DEBUG={}", tu_debug);
     }
     const std::string hook_dir = NativeLibraryDir();
     const std::string driver_dir = path.parent_path().string() + "/";

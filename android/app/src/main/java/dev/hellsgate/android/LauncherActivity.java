@@ -143,6 +143,28 @@ public class LauncherActivity extends Activity {
         root.addView(driverRow);
         updateDriverLabel();
 
+        // Turnip's own debug switches (Mesa TU_DEBUG), for testing hangs on new GPUs.
+        TextView tuDebugLabel = new TextView(this);
+        tuDebugLabel.setText("Turnip debug flags (TU_DEBUG, custom driver only; e.g. sysmem, "
+                + "nolrz, noubwc, syncdraw; comma-separated; empty for none)");
+        tuDebugLabel.setTextColor(Color.GRAY);
+        root.addView(tuDebugLabel);
+        android.widget.EditText tuDebugField = new android.widget.EditText(this);
+        tuDebugField.setSingleLine(true);
+        tuDebugField.setTextColor(Color.WHITE);
+        tuDebugField.setHint("none");
+        tuDebugField.setHintTextColor(Color.DKGRAY);
+        tuDebugField.setText(GamePaths.prefs(this).getString("tu_debug", ""));
+        tuDebugField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                GamePaths.prefs(LauncherActivity.this).edit()
+                        .putString("tu_debug", s.toString().replaceAll("\\s", "")).apply();
+            }
+        });
+        root.addView(tuDebugField);
+
         android.widget.CheckBox rpBox = new android.widget.CheckBox(this);
         rpBox.setText("Faster rendering (experimental: classic render passes; "
                 + "may cause wrong colours or freezes)");

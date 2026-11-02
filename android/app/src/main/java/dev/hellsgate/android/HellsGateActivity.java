@@ -83,7 +83,11 @@ public class HellsGateActivity extends SDLActivity {
         // Custom Vulkan driver (Turnip) loaded with libadrenotools. Only passed when one is
         // imported: an empty value would swallow the next argument.
         java.io.File driver = GpuDriver.library(this);
-        if (driver != null) args.add("--vulkan_custom_driver=" + driver.getAbsolutePath());
+        if (driver != null) {
+            args.add("--vulkan_custom_driver=" + driver.getAbsolutePath());
+            String tuDebug = GamePaths.prefs(this).getString("tu_debug", "");
+            if (!tuDebug.isEmpty()) args.add("--vulkan_custom_driver_tu_debug=" + tuDebug);
+        }
         return args.toArray(new String[0]);
     }
 }
