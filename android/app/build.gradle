@@ -17,8 +17,8 @@ android {
         applicationId = 'dev.hellsgate.android'
         minSdk = 29
         targetSdk = 35
-        versionCode = 6
-        versionName = '0.2.4-android-preview'
+        versionCode = 7
+        versionName = '0.2.5-android-preview'
         ndk { abiFilters 'arm64-v8a' }
     }
 
