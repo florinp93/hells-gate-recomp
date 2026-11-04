@@ -7,6 +7,8 @@
 // patches/generated/apply_generated_patches.py routes both through a host
 // setjmp / longjmp here.
 
+#include "guest_memory.h"
+
 #include <rex/logging/macros.h>
 #include <rex/ppc.h>
 #include <rex/runtime.h>
@@ -40,8 +42,7 @@ inline void FiberLongjmp(uint32_t return_value) {
 inline void FiberRestoreContext(PPCContext& ctx, uint8_t* base) {
   if (g_setjmp_ctx_addr == 0) return;
   uint32_t addr = g_setjmp_ctx_addr;
-  uint32_t phys_offset = (addr >= 0xE0000000u) ? 0x1000u : 0u;
-  const uint8_t* ptr = base + addr + phys_offset;
+  const uint8_t* ptr = guest::Ptr(base, addr);
   auto load64 = [&](uint32_t off) {
     return __builtin_bswap64(*reinterpret_cast<const uint64_t*>(ptr + off));
   };

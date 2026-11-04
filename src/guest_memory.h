@@ -1,22 +1,39 @@
 #pragma once
 
 // Big-endian access to guest memory. `base` is the start of the guest's 4 GB
-// virtual address space; addresses from 0xE0000000 map 4 KB higher.
+// virtual address space.
+//
+// On Windows and Apple ARM64 the host mapping of the 0xE0000000-0xFFFFFFFF
+// physical alias is shifted one 4 KB page; the generated code compensates with
+// REX_PHYS_HOST_OFFSET. On Linux and Android it is not shifted, so adding the
+// page there reads the following page (for example a VIV package's entry table
+// pointer) and every such lookup fails. Keep this in step with the
+// REX_PHYS_HOST_OFFSET definition in the generated PCH.
+
+#include <rex/platform.h>
 
 #include <cstdint>
 #include <cstring>
 
 namespace guest {
 
+#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && REX_ARCH_ARM64)
+inline constexpr uint32_t kPhysicalAliasPageOffset = 0x1000u;
+#else
+inline constexpr uint32_t kPhysicalAliasPageOffset = 0u;
+#endif
+
 // Guest physical memory, mirrored at 0xA0000000 in the virtual address space.
 inline constexpr uint32_t kPhysicalMirror = 0xA0000000u;
 inline constexpr uint32_t kPhysicalMemorySize = 512u * 1024 * 1024;
 
 inline const uint8_t* Ptr(const uint8_t* base, uint32_t address) {
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
+  return base + address +
+         (address >= 0xE0000000u ? kPhysicalAliasPageOffset : 0u);
 }
 inline uint8_t* Ptr(uint8_t* base, uint32_t address) {
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
+  return base + address +
+         (address >= 0xE0000000u ? kPhysicalAliasPageOffset : 0u);
 }
 
 inline const uint8_t* PhysicalPtr(const uint8_t* base, uint32_t physical) {
