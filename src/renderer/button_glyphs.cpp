@@ -697,6 +697,95 @@ void ReplaceArt(Image& img, const int rect[4], const Image& icon, float size = 1
 
 constexpr float kKeySize = 0.82f;
 
+Image Crop(const Image& img, const std::array<int, 4>& box) {
+  Image out(std::max(0, box[2] - box[0]), std::max(0, box[3] - box[1]));
+  for (int y = 0; y < out.h; ++y) {
+    for (int x = 0; x < out.w; ++x) std::memcpy(out.at(x, y), img.at(box[0] + x, box[1] + y), 16);
+  }
+  return out;
+}
+
+Image Transpose(const Image& img) {
+  Image out(img.h, img.w);
+  for (int y = 0; y < img.h; ++y) {
+    for (int x = 0; x < img.w; ++x) std::memcpy(out.at(y, x), img.at(x, y), 16);
+  }
+  return out;
+}
+
+float Aspect(const int box[4]) { return float(box[2] - box[0]) / float(box[3] - box[1]); }
+
+Image Widen(const Image& shape, const Image& symbol, float aspect) {
+  if (!shape.w || !shape.h) return shape;
+  float want = aspect * float(shape.h);
+  if (want < float(shape.w) - 0.5f) {
+    return Transpose(Widen(Transpose(shape), Transpose(symbol), 1.0f / aspect));
+  }
+  int width = std::max(shape.w, int(std::lround(want)));
+  int half = shape.w / 2, right = width - (shape.w - half);
+  Image out(width, shape.h);
+  for (int y = 0; y < shape.h; ++y) {
+    for (int x = 0; x < width; ++x) {
+      int sx = x < half ? x : x >= right ? x - (width - shape.w) : half;
+      std::memcpy(out.at(x, y), shape.at(sx, y), 16);
+    }
+  }
+  int ox = (width - shape.w) / 2;
+  for (int y = 0; y < symbol.h; ++y) {
+    for (int x = 0; x < symbol.w; ++x) {
+      const float* s = symbol.at(x, y);
+      Over(out.at(x + ox, y), s, s[3]);
+    }
+  }
+  return out;
+}
+
+bool IsPlain(const Image& img) {
+  for (size_t i = 0; i < img.px.size(); i += 4) {
+    if (img.px[i + 3] > 0.5f && Saturation(&img.px[i]) > 0.2f) return false;
+  }
+  return true;
+}
+
+Image PlateIcon(const Image& icon, float aspect) {
+  if (!icon.w) return icon;
+  Image art = Crop(icon, ContentBox(icon));
+  Image shape, symbol;
+  if (IsPlain(art)) {
+    shape = Image(art.w, art.h);
+    symbol = Image(art.w, art.h);
+    float hole = Luminance(kHoleColor);
+    for (int y = 0; y < art.h; ++y) {
+      for (int x = 0; x < art.w; ++x) {
+        const float* p = art.at(x, y);
+        float* s = shape.at(x, y);
+        std::copy(kKeyColor, kKeyColor + 3, s);
+        s[3] = p[3];
+        float ink =
+            p[3] > 0.0f ? std::clamp((1.0f - Luminance(p)) / (1.0f - hole), 0.0f, 1.0f) : 0.0f;
+        float* q = symbol.at(x, y);
+        std::copy(kHoleColor, kHoleColor + 3, q);
+        q[3] = ink;
+      }
+    }
+  } else {
+    const Image& cap = Icon("keyboard_a", true);
+    if (!cap.w) return icon;
+    shape = Crop(cap, ContentBox(cap));
+    symbol = Image(shape.w, shape.h);
+    Image inverted = art;
+    for (size_t i = 0; i < inverted.px.size(); i += 4) {
+      float* p = &inverted.px[i];
+      if (Saturation(p) > 0.2f) continue;
+      for (int c = 0; c < 3; ++c)
+        p[c] = std::clamp(kKeyColor[c] + kHoleColor[c] - p[c], 0.0f, 1.0f);
+    }
+    const float box[4] = {shape.w * 0.2f, shape.h * 0.14f, shape.w * 0.8f, shape.h * 0.86f};
+    Stamp(symbol, box, inverted);
+  }
+  return Widen(shape, symbol, aspect);
+}
+
 struct Binding {
   std::vector<std::string> modifiers;
   std::string key;
@@ -992,7 +1081,7 @@ const Image& PlayStationIcon(std::wstring_view label) {
   if (label == L"R3") return Icon("playstation_button_r3");
   std::string name = "playstation_trigger_";
   for (wchar_t ch : label) name += char(std::tolower(int(ch)));
-  return Icon(name);
+  return Icon(name + "_alternative");
 }
 
 const Image& StickIcon(wchar_t side, Tilt tilt) {
@@ -1018,7 +1107,9 @@ Image MakePlayStationSheet(const Image& xbox, GlyphStyle style) {
   Image img = xbox;
   const Symbol faces[4] = {Symbol::kCross, Symbol::kCircle, Symbol::kSquare, Symbol::kTriangle};
   for (int i = 0; i < 4; ++i) ReplaceArt(img, kSheetFaces[i], FaceIcon(faces[i]));
-  for (const SheetPlate& p : kSheetPlates) ReplaceArt(img, p.box, PlayStationIcon(p.label));
+  for (const SheetPlate& p : kSheetPlates) {
+    ReplaceArt(img, p.box, PlateIcon(PlayStationIcon(p.label), Aspect(p.box)));
+  }
   bool ps5 = style == GlyphStyle::kPlayStation5;
   ReplaceArt(img, kBackBox, Icon(ps5 ? "playstation5_button_create" : "playstation4_button_share"));
   ReplaceArt(img, kStartBox,
@@ -1039,7 +1130,7 @@ Image MakeKeyboardSheet(const Image& xbox, const KeyBindings& k) {
   const std::string* faces[4] = {&k.a, &k.b, &k.x, &k.y};
   for (int i = 0; i < 4; ++i) ReplaceArt(img, kSheetFaces[i], BindingIcon(*faces[i]), kKeySize);
   for (const SheetPlate& p : kSheetPlates) {
-    ReplaceArt(img, p.box, BindingIcon(BindingFor(p.label, k)), 0.9f);
+    ReplaceArt(img, p.box, PlateIcon(BindingIcon(BindingFor(p.label, k)), Aspect(p.box)));
   }
   ReplaceArt(img, kBackBox, BindingIcon(k.back), kKeySize);
   ReplaceArt(img, kStartBox, BindingIcon(k.start), kKeySize);
@@ -1663,9 +1754,10 @@ Image ApplyEdits(const Image& xbox, const std::vector<Edit>& edits, GlyphStyle s
         break;
       }
       case Edit::Kind::kPlate:
-        ReplaceArt(img, e.box,
-                   keyboard ? BindingIcon(BindingFor(e.label, k)) : PlayStationIcon(e.label),
-                   keyboard ? 0.9f : 1.0f);
+        ReplaceArt(
+            img, e.box,
+            PlateIcon(keyboard ? BindingIcon(BindingFor(e.label, k)) : PlayStationIcon(e.label),
+                      Aspect(e.box)));
         break;
       case Edit::Kind::kLabel:
         WhiteLabel(img, e.box[0], e.box[1], e.box[2] - e.box[0], e.box[3] - e.box[1],
