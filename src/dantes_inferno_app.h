@@ -10,6 +10,7 @@
 #include "renderer/renderer_config.h"
 #include "renderer/ui_overlay.h"
 #include "crash_log.h"
+#include "menu_hooks.h"
 #include "session_info.h"
 #include "timer_resolution.h"
 #include "user_paths.h"
@@ -340,6 +341,11 @@ class DantesInfernoApp : public rex::ReXApp {
 
     rex::ui::RegisterBind("bind_exit_game", "Alt+F4", "Exit game to desktop",
                           [this] { app_context().RequestDeferredQuit(); });
+    menu_hooks::SetQuitToDesktopHandler([this] {
+      app_context().CallInUIThread([this] {
+        if (window()) window()->RequestClose();
+      });
+    });
 
     saved_vsync_ = rex::cvar::Query<bool>("vsync");
 
