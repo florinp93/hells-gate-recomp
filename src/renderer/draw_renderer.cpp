@@ -19,6 +19,7 @@
 #include "Graphics/GraphicsEngine/interface/TextureView.h"
 #include "Graphics/GraphicsTools/interface/MapHelper.hpp"
 
+#include <rex/cvar.h>
 #include <rex/graphics/pipeline/shader/spirv.h>
 #include <rex/graphics/pipeline/shader/spirv_translator.h>
 #include <rex/graphics/pipeline/texture/info.h>
@@ -33,6 +34,7 @@
 #include <xxhash.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -41,6 +43,10 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+REXCVAR_DEFINE_BOOL(dante_ui_16_9, true, "Graphics",
+                    "renderer=dante: draw menus and the HUD in a centred 16:9 area on wider "
+                    "screens instead of stretching them");
 
 namespace renderer {
 namespace {
@@ -1016,7 +1022,19 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
   vp.Height = float(viewport.xy_extent[1]);
   vp.MinDepth = viewport.z_min;
   vp.MaxDepth = viewport.z_max;
-  if (video_planes >= 3 && video_luma && scale_x != scale_y) {
+  static constexpr std::array<uint64_t, 3> kUiVertexShaders = {
+      0xC40DC095B70946ACull, 0x2ED7EB623067A9D5ull, 0x3BF4A4C9E3389AA3ull};
+  const uint64_t vertex_ucode_hash = shaders.vertex_info->ucode_data_hash();
+  const bool ui_squeeze =
+      scale_x > scale_y && REXCVAR_GET(dante_ui_16_9) &&
+      std::find(kUiVertexShaders.begin(), kUiVertexShaders.end(), vertex_ucode_hash) !=
+          kUiVertexShaders.end();
+  const float ui_center = 0.5f * float(host_x(targets.width));
+  const float ui_factor = scale_y / scale_x;
+  if (ui_squeeze) {
+    vp.TopLeftX = ui_center + (vp.TopLeftX - ui_center) * ui_factor;
+    vp.Width *= ui_factor;
+  } else if (video_planes >= 3 && video_luma && scale_x != scale_y) {
     // Squeeze around the render target's centre back to the 16:9 shape:
     // pillarbox on wider aspects, letterbox on narrower ones.
     if (scale_x > scale_y) {
@@ -1038,6 +1056,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
   dl::Rect rect{int32_t(host_x(scissor.offset[0])), int32_t(host_y(scissor.offset[1])),
                 int32_t(std::min(host_x(scissor.offset[0] + scissor.extent[0]), host_width)),
                 int32_t(std::min(host_y(scissor.offset[1] + scissor.extent[1]), host_height))};
+  if (ui_squeeze) {
+    rect.left = int32_t(std::floor(ui_center + (float(rect.left) - ui_center) * ui_factor));
+    rect.right = int32_t(std::ceil(ui_center + (float(rect.right) - ui_center) * ui_factor));
+  }
   if (rect.right <= rect.left || rect.bottom <= rect.top) {
     ++m.skipped_scissor;
     return false;
