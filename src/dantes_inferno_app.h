@@ -50,6 +50,11 @@ REXCVAR_DEFINE_DOUBLE(time_scalar, 1.0, "Gameplay",
 REXCVAR_DEFINE_BOOL(show_fps_overlay, false, "UI",
                     "Show FPS and frametime overlay (top-left corner)");
 
+REXCVAR_DEFINE_BOOL(dev_keys, false, "Diagnostics",
+                    "Bind the developer keys: F2 fast-forward, F5 record, F6/F8 traces, "
+                    "F9 state verifier, F10 host rendering, F11 debug view, Insert RenderDoc, "
+                    "Home instant replay");
+
 REXCVAR_DEFINE_BOOL(achievement_preview, false, "UI",
                     "Show the first achievement's notification once (tests the toast and sound)");
 
@@ -331,78 +336,80 @@ class DantesInfernoApp : public rex::ReXApp {
       }
     });
 
-    rex::ui::RegisterBind("bind_pass_trace", "F6", "Trace GPU passes for 5 seconds", [] {
-      bool ok = rex::cvar::SetFlagByName("gpu_pass_trace_frames", "300");
-      REXLOG_INFO("PASS-TRACE trigger: set={} value={}", ok,
-                  rex::cvar::Query<int32_t>("gpu_pass_trace_frames"));
-    });
-
-    rex::ui::RegisterBind("bind_d3d_trace", "F8", "Trace D3D API calls for 3 frames", [] {
-      bool ok = rex::cvar::SetFlagByName("d3d_trace_frames", "3");
-      REXLOG_INFO("D3D-TRACE trigger: set={}", ok);
-    });
-
-    rex::ui::RegisterBind(
-        "bind_host_rendering", "F10", "Toggle Xenos host rendering (sync keeps running)", [] {
-          bool enable = !rex::cvar::Query<bool>("gpu_host_rendering");
-          bool ok = rex::cvar::SetFlagByName("gpu_host_rendering", enable ? "true" : "false");
-          REXLOG_INFO("gpu_host_rendering={} (set={})", enable, ok);
-        });
-
-    rex::ui::RegisterBind("bind_dante_debug_view", "F11",
-                          "renderer=dante: cycle the presented render target", [] {
-                            int32_t view = (rex::cvar::Query<int32_t>("dante_debug_view") + 1) % 9;
-                            rex::cvar::SetFlagByName("dante_debug_view", std::to_string(view));
-                            REXLOG_INFO("dante_debug_view={}", view);
-                          });
-
-    rex::ui::RegisterBind("bind_rdoc_capture", "Insert",
-                          "Under RenderDoc: capture the next guest frames",
-                          [] { rex::cvar::SetFlagByName("rdoc_capture_frame", "true"); });
-
     rex::ui::RegisterBind("bind_dante_smaa", "End", "renderer=dante: toggle SMAA", [] {
       bool enabled = !rex::cvar::Query<bool>("dante_smaa");
       rex::cvar::SetFlagByName("dante_smaa", enabled ? "true" : "false");
       REXLOG_INFO("SMAA {}", enabled ? "on" : "off");
     });
 
-    rex::ui::RegisterBind("bind_dante_replay", "Home",
-                          "renderer=dante: save the instant replay (last 3 seconds)",
-                          [] { rex::cvar::SetFlagByName("dante_replay_dump", "true"); });
+    if (REXCVAR_GET(dev_keys)) {
+      rex::ui::RegisterBind("bind_pass_trace", "F6", "Trace GPU passes for 5 seconds", [] {
+        bool ok = rex::cvar::SetFlagByName("gpu_pass_trace_frames", "300");
+        REXLOG_INFO("PASS-TRACE trigger: set={} value={}", ok,
+                    rex::cvar::Query<int32_t>("gpu_pass_trace_frames"));
+      });
 
-    rex::ui::RegisterBind(
-        "bind_dante_record", "F5", "renderer=dante: record the next 3600 presented frames", [] {
-          bool start = rex::cvar::Query<int32_t>("dante_record_frames") == 0;
-          rex::cvar::SetFlagByName("dante_record_frames", start ? "3600" : "0");
-          REXLOG_INFO("dante_record_frames: {}", start ? "recording 3600 frames" : "stopped");
-        });
+      rex::ui::RegisterBind("bind_d3d_trace", "F8", "Trace D3D API calls for 3 frames", [] {
+        bool ok = rex::cvar::SetFlagByName("d3d_trace_frames", "3");
+        REXLOG_INFO("D3D-TRACE trigger: set={}", ok);
+      });
+
+      rex::ui::RegisterBind(
+          "bind_host_rendering", "F10", "Toggle Xenos host rendering (sync keeps running)", [] {
+            bool enable = !rex::cvar::Query<bool>("gpu_host_rendering");
+            bool ok = rex::cvar::SetFlagByName("gpu_host_rendering", enable ? "true" : "false");
+            REXLOG_INFO("gpu_host_rendering={} (set={})", enable, ok);
+          });
+
+      rex::ui::RegisterBind("bind_dante_debug_view", "F11",
+                            "renderer=dante: cycle the presented render target", [] {
+                              int32_t view = (rex::cvar::Query<int32_t>("dante_debug_view") + 1) % 9;
+                              rex::cvar::SetFlagByName("dante_debug_view", std::to_string(view));
+                              REXLOG_INFO("dante_debug_view={}", view);
+                            });
+
+      rex::ui::RegisterBind("bind_rdoc_capture", "Insert",
+                            "Under RenderDoc: capture the next guest frames",
+                            [] { rex::cvar::SetFlagByName("rdoc_capture_frame", "true"); });
+
+      rex::ui::RegisterBind("bind_dante_replay", "Home",
+                            "renderer=dante: save the instant replay (last 3 seconds)",
+                            [] { rex::cvar::SetFlagByName("dante_replay_dump", "true"); });
+
+      rex::ui::RegisterBind(
+          "bind_dante_record", "F5", "renderer=dante: record the next 3600 presented frames", [] {
+            bool start = rex::cvar::Query<int32_t>("dante_record_frames") == 0;
+            rex::cvar::SetFlagByName("dante_record_frames", start ? "3600" : "0");
+            REXLOG_INFO("dante_record_frames: {}", start ? "recording 3600 frames" : "stopped");
+          });
 
 #ifdef DANTESINFERNO_DEV_CHEATS
-    // Development cheats (src/damage_hooks.cpp).
-    auto toggle_cheat = [](const char* cvar, const char* label) {
-      bool enabled = !rex::cvar::Query<bool>(cvar);
-      rex::cvar::SetFlagByName(cvar, enabled ? "true" : "false");
-      REXLOG_INFO("CHEAT {} {}", label, enabled ? "on" : "off");
-    };
-    rex::ui::RegisterBind("bind_cheat_god", "PageUp", "Cheat: toggle no damage or hits on the player",
-                          [toggle_cheat] { toggle_cheat("dante_cheat_god", "god mode"); });
-    rex::ui::RegisterBind("bind_cheat_one_hit", "PageDown", "Cheat: toggle one-hit kills",
-                          [toggle_cheat] { toggle_cheat("dante_cheat_one_hit", "one-hit kills"); });
+      // Development cheats (src/damage_hooks.cpp).
+      auto toggle_cheat = [](const char* cvar, const char* label) {
+        bool enabled = !rex::cvar::Query<bool>(cvar);
+        rex::cvar::SetFlagByName(cvar, enabled ? "true" : "false");
+        REXLOG_INFO("CHEAT {} {}", label, enabled ? "on" : "off");
+      };
+      rex::ui::RegisterBind("bind_cheat_god", "PageUp", "Cheat: toggle no damage or hits on the player",
+                            [toggle_cheat] { toggle_cheat("dante_cheat_god", "god mode"); });
+      rex::ui::RegisterBind("bind_cheat_one_hit", "PageDown", "Cheat: toggle one-hit kills",
+                            [toggle_cheat] { toggle_cheat("dante_cheat_one_hit", "one-hit kills"); });
 #endif
 
-    rex::ui::RegisterBind("bind_verify_gpu_state", "F9", "Verify the GPU state of 3 frames", [] {
-      bool ok = rex::cvar::SetFlagByName("verify_gpu_state_frames", "3");
-      REXLOG_INFO("NATIVE-OBS trigger: set={}", ok);
-    });
+      rex::ui::RegisterBind("bind_verify_gpu_state", "F9", "Verify the GPU state of 3 frames", [] {
+        bool ok = rex::cvar::SetFlagByName("verify_gpu_state_frames", "3");
+        REXLOG_INFO("NATIVE-OBS trigger: set={}", ok);
+      });
 
-    rex::ui::RegisterBind("bind_fast_forward", "F2", "Toggle 50x fast-forward", [this] {
-      bool fast = REXCVAR_GET(time_scalar) > 1.0;
-      double target = fast ? 1.0 : 50.0;
-      rex::cvar::SetFlagByName("time_scalar", std::to_string(target));
-      rex::chrono::Clock::set_guest_time_scalar(target);
-      if (!fast) saved_vsync_ = rex::cvar::Query<bool>("vsync");
-      rex::cvar::SetFlagByName("vsync", fast ? (saved_vsync_ ? "true" : "false") : "false");
-    });
+      rex::ui::RegisterBind("bind_fast_forward", "F2", "Toggle 50x fast-forward", [this] {
+        bool fast = REXCVAR_GET(time_scalar) > 1.0;
+        double target = fast ? 1.0 : 50.0;
+        rex::cvar::SetFlagByName("time_scalar", std::to_string(target));
+        rex::chrono::Clock::set_guest_time_scalar(target);
+        if (!fast) saved_vsync_ = rex::cvar::Query<bool>("vsync");
+        rex::cvar::SetFlagByName("vsync", fast ? (saved_vsync_ ? "true" : "false") : "false");
+      });
+    }
 
     AutoInstallDlc();
   }

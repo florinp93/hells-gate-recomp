@@ -95,7 +95,7 @@ REXCVAR_DEFINE_BOOL(dante_depth_float, false, "Diagnostics",
                     "renderer=dante: 32-bit float depth for every depth buffer, as on GPUs "
                     "without 24-bit depth (AMD); read at startup");
 
-REXCVAR_DEFINE_INT32(dante_replay_frames, 180, "Diagnostics",
+REXCVAR_DEFINE_INT32(dante_replay_frames, 0, "Diagnostics",
                      "renderer=dante: keep the last N presented frames (640x360) for an "
                      "instant replay; 0 disables")
     .range(0, 1200);

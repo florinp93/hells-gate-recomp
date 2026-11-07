@@ -268,6 +268,7 @@ struct TextureCache::Impl {
     desc.Swizzle = ComponentMapping(swizzle);
     dl::RefCntAutoPtr<dl::ITextureView> view;
     texture->CreateView(desc, &view);
+    if (!view) return nullptr;
     views.emplace(key, view);
     return view;
   }
@@ -746,6 +747,7 @@ dl::ISampler* TextureCache::GetSampler(const uint32_t fetch_dwords[6], uint32_t 
   }
   dl::RefCntAutoPtr<dl::ISampler> sampler;
   m.device->CreateSampler(desc, &sampler);
+  if (!sampler) return nullptr;
   m.samplers.emplace(key, sampler);
   return sampler;
 }

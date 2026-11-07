@@ -996,7 +996,8 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
   }
   for (const SamplerVariable& s : pipeline->samplers) {
     const uint32_t* fetch = fetch_base + (s.fetch_constant & 31) * 6;
-    s.variable->Set(m.textures->GetSampler(fetch, s.mag, s.min, s.mip, s.aniso));
+    dl::ISampler* sampler = m.textures->GetSampler(fetch, s.mag, s.min, s.mip, s.aniso);
+    s.variable->Set(sampler ? sampler : m.dummy_sampler.RawPtr());
   }
   {
     dl::MapHelper<Translator::SystemConstants> map(m.context, m.system_constants, dl::MAP_WRITE,
