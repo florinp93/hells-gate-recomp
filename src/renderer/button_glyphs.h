@@ -1,9 +1,9 @@
 // renderer=dante button glyphs: the game's Xbox button icon sheet and the HUD
 // art with Xbox buttons (face button spheres, shoulder plates, the Fury bar's
 // "LS RS", the execution prompt's 3D trigger button) are replaced by
-// PlayStation or keyboard / mouse versions generated from them at runtime (no
-// game art shipped). Keyboard versions show the current bindings and are
-// redrawn when they change.
+// PlayStation or keyboard / mouse versions built at runtime from Kenney's Input
+// Prompts icons (CC0, assets/glyphs/kenney; no game art shipped). Keyboard
+// versions show the current bindings and are redrawn when they change.
 
 #pragma once
 
@@ -30,6 +30,7 @@ struct KeyBindings {
   std::string back, start;
   std::string lstick_up, lstick_down, lstick_left, lstick_right, lstick_press;
   std::string rstick_up, rstick_down, rstick_left, rstick_right, rstick_press;
+  std::string dpad_up, dpad_down, dpad_left, dpad_right;
   bool mouse_look = true;  // the right stick is the mouse
   bool operator==(const KeyBindings&) const = default;
 };

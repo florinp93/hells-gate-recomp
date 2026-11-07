@@ -321,6 +321,10 @@ class DantesInfernoApp : public rex::ReXApp {
         k.rstick_left = bind("keybind_rstick_left");
         k.rstick_right = bind("keybind_rstick_right");
         k.rstick_press = bind("keybind_rstick_press");
+        k.dpad_up = bind("keybind_dpad_up");
+        k.dpad_down = bind("keybind_dpad_down");
+        k.dpad_left = bind("keybind_dpad_left");
+        k.dpad_right = bind("keybind_dpad_right");
         k.mouse_look = rex::cvar::Query<bool>("mnk_mouse");
         return k;
       });
