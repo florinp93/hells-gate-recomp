@@ -43,6 +43,36 @@ inline std::string ModuleOffset(const void* address) {
                      reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module));
 }
 
+inline bool Readable(uintptr_t address, size_t size) {
+  MEMORY_BASIC_INFORMATION region = {};
+  if (!VirtualQuery(reinterpret_cast<const void*>(address), &region, sizeof(region))) return false;
+  if (region.State != MEM_COMMIT || (region.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+  return address + size <= reinterpret_cast<uintptr_t>(region.BaseAddress) + region.RegionSize;
+}
+
+inline USHORT WalkStack(const CONTEXT& start, void** frames, USHORT max) {
+  CONTEXT context = start;
+  USHORT count = 0;
+  while (count < max) {
+    frames[count++] = reinterpret_cast<void*>(context.Rip);
+    const DWORD64 stack = context.Rsp;
+    DWORD64 image_base = 0;
+    PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+    if (function) {
+      void* handler_data = nullptr;
+      DWORD64 establisher = 0;
+      RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
+                       &handler_data, &establisher, nullptr);
+    } else {
+      if (!Readable(context.Rsp, sizeof(DWORD64))) break;
+      context.Rip = *reinterpret_cast<const DWORD64*>(context.Rsp);
+      context.Rsp += sizeof(DWORD64);
+    }
+    if (!context.Rip || context.Rsp <= stack) break;
+  }
+  return count;
+}
+
 inline void Report(EXCEPTION_POINTERS* info, const char* kind) {
   static volatile LONG reported = 0;
   if (InterlockedExchange(&reported, 1)) return;
@@ -58,8 +88,10 @@ inline void Report(EXCEPTION_POINTERS* info, const char* kind) {
                   uint32_t(record->ExceptionCode), ModuleOffset(record->ExceptionAddress),
                   reinterpret_cast<uintptr_t>(record->ExceptionAddress), GetCurrentThreadId(),
                   detail);
+  if (auto logger = rex::GetLogger()) logger->flush();
   void* frames[32] = {};
-  USHORT count = RtlCaptureStackBackTrace(0, 32, frames, nullptr);
+  USHORT count = info->ContextRecord ? WalkStack(*info->ContextRecord, frames, 32)
+                                     : RtlCaptureStackBackTrace(0, 32, frames, nullptr);
   for (USHORT i = 0; i < count; ++i) {
     REXLOG_CRITICAL("CRASH stack {}: {}", i, ModuleOffset(frames[i]));
   }
