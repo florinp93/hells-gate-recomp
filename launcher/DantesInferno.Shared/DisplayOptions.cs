@@ -286,71 +286,69 @@ namespace DantesInferno
             return config.RendererOverride.Equals("xenos", StringComparison.OrdinalIgnoreCase);
         }
 
-        public static string BuildLaunchArguments(GameConfig config, string gameDataRoot, DisplayAspect display)
+        public static List<KeyValuePair<string, string>> BuildGameSettings(GameConfig config, string gameDataRoot, DisplayAspect display)
         {
             if (config == null)
                 throw new ArgumentNullException("config");
             if (display == null)
                 display = DetectPrimaryAspect();
 
-            var args = new List<string>();
-            args.Add(string.Format("--game_data_root=\"{0}\"", gameDataRoot));
+            var settings = new List<KeyValuePair<string, string>>();
+            Action<string, string> add = (key, value) => settings.Add(new KeyValuePair<string, string>(key, value));
+
+            add("game_data_root", gameDataRoot);
 
             if (IsRendererFallback(config))
             {
-                args.Add("--renderer=xenos");
-                args.Add("--render_target_path_d3d12=rov");
-                args.Add("--native_render_scale=auto");
+                add("renderer", "xenos");
+                add("render_target_path_d3d12", "rov");
+                add("native_render_scale", "auto");
+                add("fullscreen_exclusive", null);
             }
             else
             {
-                args.Add("--renderer=dante");
+                add("renderer", "dante");
+                add("render_target_path_d3d12", null);
+                add("native_render_scale", null);
                 int width, height;
                 string resolution = TryParseResolution(config.RenderResolution, out width, out height)
                     ? FormatResolution(width, height)
                     : NativeResolution(display);
-                args.Add("--dante_resolution=" + resolution);
-                if (config.Fullscreen && TryParseResolution(resolution, out width, out height) &&
-                    (width > display.DetectedWidth || height > display.DetectedHeight))
-                    args.Add("--fullscreen_exclusive=" + resolution);
-                args.Add(config.Smaa ? "--dante_smaa=true" : "--dante_smaa=false");
-                args.Add(string.Format(CultureInfo.InvariantCulture, "--dante_shadow_scale={0}",
-                    NormalizeShadowScale(config.ShadowScale)));
+                add("dante_resolution", resolution);
+                bool exclusive = config.Fullscreen && TryParseResolution(resolution, out width, out height) &&
+                    (width > display.DetectedWidth || height > display.DetectedHeight);
+                add("fullscreen_exclusive", exclusive ? resolution : null);
+                add("dante_smaa", config.Smaa ? "true" : "false");
+                add("dante_shadow_scale", NormalizeShadowScale(config.ShadowScale).ToString(CultureInfo.InvariantCulture));
             }
 
             string aspect = NormalizeAspect(config.Aspect);
+            string target = null;
             foreach (var option in AspectOptions)
             {
                 if (option.Key == aspect && option.Value > 0)
-                    args.Add(string.Format(CultureInfo.InvariantCulture,
-                        "--ultrawide_target_aspect={0:0.####}", option.Value));
+                    target = option.Value.ToString("0.####", CultureInfo.InvariantCulture);
             }
+            add("ultrawide_target_aspect", target);
 
             // The game paces to its vblank, which follows the video mode's
             // refresh rate; vsync keeps that vblank running at that rate.
-            args.Add(string.Format(CultureInfo.InvariantCulture,
-                "--video_mode_refresh_rate={0}", FrameRateFor(config, display)));
-            args.Add("--vsync=true");
-
-            if (config.ShowFpsOverlay)
-                args.Add("--show_fps_overlay=true");
-
-            if (config.AnisotropicOverride >= 0)
-                args.Add(string.Format(CultureInfo.InvariantCulture, "--anisotropic_override={0}", config.AnisotropicOverride));
-
-            args.Add(string.Format("--fullscreen={0}", config.Fullscreen.ToString().ToLowerInvariant()));
-
-            args.Add("--input_backend=" + config.InputBackend);
+            add("video_mode_refresh_rate", FrameRateFor(config, display).ToString(CultureInfo.InvariantCulture));
+            add("vsync", "true");
+            add("show_fps_overlay", config.ShowFpsOverlay ? "true" : "false");
+            add("anisotropic_override", config.AnisotropicOverride >= 0
+                ? config.AnisotropicOverride.ToString(CultureInfo.InvariantCulture)
+                : null);
+            add("fullscreen", config.Fullscreen ? "true" : "false");
+            add("input_backend", config.InputBackend);
 
             // Logs are always written, flushed every 2 s so a freeze or a
             // killed process still leaves them complete.
-            args.Add(config.DetailedLogging ? "--log_level=debug" : "--log_level=info");
-            args.Add("--log_flush_interval=2");
+            add("log_level", config.DetailedLogging ? "debug" : "info");
+            add("log_flush_interval", "2");
 
-            args.Add("--glyph_family=" + config.GlyphFamily);
-
-            if (config.UserLanguage != 1)
-                args.Add(string.Format(CultureInfo.InvariantCulture, "--user_language={0}", config.UserLanguage));
+            add("glyph_family", config.GlyphFamily);
+            add("user_language", config.UserLanguage.ToString(CultureInfo.InvariantCulture));
 
             var keybinds = new Dictionary<string, string>
             {
@@ -382,9 +380,23 @@ namespace DantesInferno
             foreach (var kv in keybinds)
             {
                 if (!string.IsNullOrEmpty(kv.Value))
-                    args.Add(string.Format("--{0}={1}", kv.Key, kv.Value));
+                    add(kv.Key, kv.Value);
             }
 
+            return settings;
+        }
+
+        public static string BuildLaunchArguments(GameConfig config, string gameDataRoot, DisplayAspect display)
+        {
+            var args = new List<string>();
+            foreach (var kv in BuildGameSettings(config, gameDataRoot, display))
+            {
+                if (kv.Value == null)
+                    continue;
+                args.Add(kv.Value.IndexOf(' ') >= 0 || kv.Key == "game_data_root"
+                    ? string.Format("--{0}=\"{1}\"", kv.Key, kv.Value)
+                    : string.Format("--{0}={1}", kv.Key, kv.Value));
+            }
             return string.Join(" ", args);
         }
     }

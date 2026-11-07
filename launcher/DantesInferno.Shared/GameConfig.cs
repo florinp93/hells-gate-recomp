@@ -50,7 +50,9 @@ namespace DantesInferno
                 string value = _values[key];
                 if (value == null) continue;
 
-                if (IsNumber(value) || IsBool(value))
+                if (IsBool(value))
+                    sb.AppendLine($"{key} = {value.ToLowerInvariant()}");
+                else if (IsNumber(value))
                     sb.AppendLine($"{key} = {value}");
                 else
                     sb.AppendLine($"{key} = \"{Escape(value)}\"");
@@ -59,7 +61,7 @@ namespace DantesInferno
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
-                File.WriteAllText(_path, sb.ToString(), Encoding.UTF8);
+                File.WriteAllText(_path, sb.ToString(), new UTF8Encoding(false));
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -246,6 +248,17 @@ namespace DantesInferno
                 _values.Remove(key);
         }
 
+        public void ApplyGameSettings(IEnumerable<KeyValuePair<string, string>> settings)
+        {
+            foreach (var kv in settings)
+            {
+                if (kv.Value == null)
+                    _values.Remove(kv.Key);
+                else
+                    _values[kv.Key] = kv.Value;
+            }
+        }
+
         public bool Remove(string key)
         {
             if (string.IsNullOrEmpty(key))
@@ -261,9 +274,9 @@ namespace DantesInferno
         // Settings of the old renderers and display modes, dropped from the config.
         private static readonly string[] LegacyKeys =
         {
-            "aspect_ratio", "resolution", "resolution_scale", "renderer",
-            "render_target_path_vulkan", "render_target_path_d3d12", "swap_post_effect",
-            "present_effect", "present_dither", "vsync", "log_level",
+            "aspect_ratio", "resolution", "resolution_scale",
+            "render_target_path_vulkan", "swap_post_effect",
+            "present_effect", "present_dither",
         };
 
         public bool MigrateLegacySettings()

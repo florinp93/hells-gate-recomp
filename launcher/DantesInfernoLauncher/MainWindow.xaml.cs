@@ -21,6 +21,8 @@ namespace DantesInferno.Launcher
         private List<string> _resolutionOptions;
         private string _launcherLanguage = LauncherLocalizer.DefaultLanguage;
         private bool _populatingLauncherLanguage;
+        private readonly bool _autoPlay = Environment.GetCommandLineArgs()
+            .Skip(1).Any(a => string.Equals(a, "--play", StringComparison.OrdinalIgnoreCase));
 
         private const string IssuesUrl = "https://github.com/florinp93/hells-gate-recomp/issues";
         // Texture filtering choices; index 0 ("Default") leaves the game's own.
@@ -40,9 +42,27 @@ namespace DantesInferno.Launcher
             ApplyLocalization();
             RefreshPlayStatus();
             RefreshDlcStatus();
-            CheckForUpdatesOnStartup();
+            if (!_autoPlay)
+                CheckForUpdatesOnStartup();
             RefreshSettingsSummary();
             Closing += (s, e) => AutoSave();
+            if (_autoPlay)
+            {
+                WindowState = WindowState.Minimized;
+                ShowInTaskbar = false;
+                Loaded += (s, e) =>
+                {
+                    string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
+                    if (!File.Exists(Path.Combine(gameData, "default.xex")))
+                    {
+                        ShowLauncher();
+                        return;
+                    }
+                    PlayButton_Click(null, null);
+                    if (!_gameRunning)
+                        ShowLauncher();
+                };
+            }
             ContentRendered += (s, e) =>
             {
                 string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
@@ -236,7 +256,7 @@ namespace DantesInferno.Launcher
             {
                 _launcherLanguage = LauncherLocalizer.NormalizeLanguage(lang);
                 _config.LauncherLanguage = _launcherLanguage;
-                _config.Save();
+                SaveConfig();
                 ApplyLocalization();
             }
         }
@@ -490,7 +510,7 @@ namespace DantesInferno.Launcher
         private void SaveKeybinds_Click(object sender, RoutedEventArgs e)
         {
             SaveKeybindsToConfig();
-            _config.Save();
+            SaveConfig();
             MessageBox.Show("Keyboard bindings saved. They will be applied when you click PLAY.", "Saved",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -849,7 +869,7 @@ namespace DantesInferno.Launcher
             if (!SaveSettingsToConfig())
                 return;
             SaveKeybindsToConfig();
-            _config.Save();
+            SaveConfig();
 
             ClearOldLogs();
 
@@ -901,12 +921,26 @@ namespace DantesInferno.Launcher
                     _gameRunning = false;
                     PlayButton.IsEnabled = true;
 
+                    if (_autoPlay && started && exitCode == 0)
+                    {
+                        Close();
+                        return;
+                    }
+                    if (_autoPlay)
+                        ShowLauncher();
                     if (!started)
                         ShowLaunchFailed(exePath, arguments, errors);
                     else if (exitCode != 0)
                         ShowCrashDialog(exitCode);
                 }));
             }));
+        }
+
+        private void ShowLauncher()
+        {
+            ShowInTaskbar = true;
+            WindowState = WindowState.Normal;
+            Activate();
         }
 
         private void ShowLaunchFailed(string exePath, string arguments, List<string> errors)
@@ -1134,12 +1168,19 @@ namespace DantesInferno.Launcher
             NavSettings.IsChecked = true;
         }
 
+        private void SaveConfig()
+        {
+            string gameData = _config.GameDataRoot ?? PathHelper.GetGameDataPath(_installDir);
+            _config.ApplyGameSettings(DisplayOptions.BuildGameSettings(_config, gameData, _displayAspect));
+            _config.Save();
+        }
+
         private bool AutoSave()
         {
             if (_config == null || !SaveSettingsToConfig())
                 return false;
             SaveKeybindsToConfig();
-            _config.Save();
+            SaveConfig();
             RefreshSettingsSummary();
             return true;
         }
@@ -1316,7 +1357,7 @@ namespace DantesInferno.Launcher
         {
             if (!SaveSettingsToConfig())
                 return;
-            _config.Save();
+            SaveConfig();
             RefreshPlayStatus();
             MessageBox.Show("Settings saved. They will be applied when you click PLAY.", "Saved",
                 MessageBoxButton.OK, MessageBoxImage.Information);

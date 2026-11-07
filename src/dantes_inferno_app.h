@@ -31,6 +31,7 @@
 #include <rex/system/xam/content_manager.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/keybinds.h>
+#include <toml++/toml.hpp>
 
 #include <array>
 #include <atomic>
@@ -90,6 +91,22 @@ class DantesInfernoApp : public rex::ReXApp {
   void OnConfigurePaths(rex::PathConfig& paths) override {
     user_paths::Configure(paths);
     if (!paths.game_data_root.empty()) return;
+
+    std::error_code config_ec;
+    if (std::filesystem::is_regular_file(paths.config_path, config_ec)) {
+      std::ifstream file(paths.config_path, std::ios::binary);
+      try {
+        auto config = toml::parse(file);
+        if (auto root = config["game_data_root"].value<std::string>(); root && !root->empty()) {
+          std::filesystem::path dir(std::u8string(root->begin(), root->end()));
+          if (std::filesystem::is_directory(dir, config_ec)) {
+            paths.game_data_root = dir;
+            return;
+          }
+        }
+      } catch (const toml::parse_error&) {
+      }
+    }
 
     const std::filesystem::path candidates[] = {
         rex::filesystem::GetExecutableFolder() / "game",

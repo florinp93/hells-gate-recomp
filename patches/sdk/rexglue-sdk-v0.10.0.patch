@@ -4909,6 +4909,46 @@ index 7360ed9..383b1ba 100644
    uint32_t last_acquired_and_ready =
        guest_output_mailbox_acquired_and_ready_.load(std::memory_order_relaxed);
    // Desired acquired = current acquired (changed only by the consumers).
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..7bea7ad 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -51,6 +51,12 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
+                       "GPU emulation")
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+ 
++REXCVAR_DEFINE_STRING(gpu_backend, "any", "GPU",
++                      "Backend of the GPU plugin: any (D3D12, or Vulkan when D3D12 fails), "
++                      "d3d12 or vulkan")
++    .allowed({"any", "d3d12", "vulkan"})
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ namespace rex {
+ 
+ // --- ReXApp ---
+@@ -314,7 +320,7 @@ bool ReXApp::SetupPresentation() {
+   OnPreSetup(config_);
+ 
+   if (!config_.graphics && !config_.gpu_plugin.empty()) {
+-    config_.graphics = rex::system::LoadGpuPlugin(config_.gpu_plugin);
++    config_.graphics = rex::system::LoadGpuPlugin(config_.gpu_plugin, REXCVAR_GET(gpu_backend));
+     if (!config_.graphics) {
+       // Fatal by design: no silent headless fallback.
+       auto msg =
+@@ -327,6 +333,13 @@ bool ReXApp::SetupPresentation() {
+ 
+   if (config_.graphics) {
+     X_STATUS status = config_.graphics->SetupPresentation(&app_context());
++    if (XFAILED(status) && !config_.gpu_plugin.empty() && REXCVAR_GET(gpu_backend) == "any") {
++      REXLOG_WARN("Graphics presentation setup failed: {:08X}; retrying with Vulkan", status);
++      config_.graphics.reset();
++      config_.graphics = rex::system::LoadGpuPlugin(config_.gpu_plugin, "vulkan");
++      status = config_.graphics ? config_.graphics->SetupPresentation(&app_context())
++                                : X_STATUS_UNSUCCESSFUL;
++    }
+     if (XFAILED(status)) {
+       REXLOG_ERROR("Graphics presentation setup failed: {:08X}", status);
+       return false;
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
 index 23645ef..110e310 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
