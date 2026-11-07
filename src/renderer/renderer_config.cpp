@@ -3,7 +3,11 @@
 #include <rex/cvar.h>
 #include <rex/logging/macros.h>
 
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#include <SDL3/SDL.h>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -30,6 +34,21 @@ REXCVAR_DEFINE_BOOL(dante_packet_inventory, false, "Diagnostics",
                     "the sync-only command processor executes, logged every 10 s)");
 
 namespace renderer {
+
+namespace {
+
+int ScreenHeight() {
+#if defined(_WIN32)
+  return GetSystemMetrics(SM_CYSCREEN);
+#else
+  // Display modes are in screen coordinates; a scaled (HiDPI) output has
+  // pixel_density times as many pixels, which is what the swap chain gets.
+  const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+  return mode ? int(mode->h * mode->pixel_density + 0.5f) : 720;
+#endif
+}
+
+}  // namespace
 
 std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem() {
   const std::string renderer = rex::cvar::Query<std::string>("renderer");
@@ -80,7 +99,7 @@ void ApplyNativeRenderScale() {
     const bool fullscreen = rex::cvar::Query<bool>("fullscreen");
     const int window_height = rex::cvar::Query<int32_t>("window_height");
     const int target_height =
-        fullscreen ? GetSystemMetrics(SM_CYSCREEN) : (window_height > 0 ? window_height : 720);
+        fullscreen ? ScreenHeight() : (window_height > 0 ? window_height : 720);
     scale = (target_height + 359) / 720;
   } else {
     scale = std::atoi(mode.c_str());

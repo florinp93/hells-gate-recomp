@@ -1,10 +1,13 @@
 #pragma once
 
 // Big-endian access to guest memory. `base` is the start of the guest's 4 GB
-// virtual address space; addresses from 0xE0000000 map 4 KB higher.
+// virtual address space. The host offset of the 0xE0000000 view depends on the
+// platform's mapping granularity and comes from the SDK (PhysicalHostOffset).
 
 #include <cstdint>
 #include <cstring>
+
+#include <rex/system/xmemory.h>
 
 namespace guest {
 
@@ -13,10 +16,10 @@ inline constexpr uint32_t kPhysicalMirror = 0xA0000000u;
 inline constexpr uint32_t kPhysicalMemorySize = 512u * 1024 * 1024;
 
 inline const uint8_t* Ptr(const uint8_t* base, uint32_t address) {
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
+  return base + address + rex::memory::detail::PhysicalHostOffset(address);
 }
 inline uint8_t* Ptr(uint8_t* base, uint32_t address) {
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
+  return base + address + rex::memory::detail::PhysicalHostOffset(address);
 }
 
 inline const uint8_t* PhysicalPtr(const uint8_t* base, uint32_t physical) {

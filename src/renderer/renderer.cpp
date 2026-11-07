@@ -39,6 +39,10 @@
 #include <rex/logging/macros.h>
 #include <rex/ui/window.h>
 
+#if !defined(_WIN32)
+#include <SDL3/SDL.h>
+#endif
+
 #include <fmt/format.h>
 #include <xxhash.h>
 
@@ -1356,7 +1360,20 @@ void PresentTestPattern() {
 bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir) {
   std::lock_guard lock(g_mutex);
   if (g_device) return true;
+#if defined(_WIN32)
   void* hwnd = window ? window->GetNativeWindowHandle() : nullptr;
+#else
+  // The SDK reports no native handle outside Win32; VulkanDevice takes the
+  // game's only SDL window instead.
+  void* hwnd = nullptr;
+  if (window) {
+    int count = 0;
+    if (SDL_Window** windows = SDL_GetWindows(&count)) {
+      if (count > 0) hwnd = windows[0];
+      SDL_free(windows);
+    }
+  }
+#endif
   if (!hwnd) {
     REXLOG_ERROR("DanteDevice: no game window");
     return false;

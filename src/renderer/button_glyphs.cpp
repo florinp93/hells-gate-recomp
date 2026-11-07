@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -28,6 +29,16 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <fontconfig/fontconfig.h>
+
+#include <fstream>
+#include <iterator>
+
+#define STBTT_STATIC
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "imstb_truetype.h"
+#endif
 
 namespace renderer {
 namespace {
@@ -242,6 +253,7 @@ struct TextLayer {
   Mask fill, outline;
 };
 
+#if defined(_WIN32)
 class GdiCanvas {
  public:
   GdiCanvas(int w, int h) : w_(w * kTextScale), h_(h * kTextScale) {
@@ -317,23 +329,6 @@ class GdiCanvas {
   int width() const { return w_; }
   int height() const { return h_; }
 
-  // Box-filtered 1x coverage.
-  Mask Downsample() const {
-    Mask m(w_ / kTextScale, h_ / kTextScale);
-    for (int y = 0; y < m.h; ++y) {
-      for (int x = 0; x < m.w; ++x) {
-        float sum = 0;
-        for (int sy = 0; sy < kTextScale; ++sy) {
-          for (int sx = 0; sx < kTextScale; ++sx) {
-            sum += Coverage(x * kTextScale + sx, y * kTextScale + sy);
-          }
-        }
-        m.at(x, y) = sum / float(kTextScale * kTextScale);
-      }
-    }
-    return m;
-  }
-
  private:
   int w_, h_;
   HDC dc_ = nullptr;
@@ -344,6 +339,223 @@ class GdiCanvas {
   uint8_t* bits_ = nullptr;
   TEXTMETRICW metrics_ = {};
 };
+#else
+// GDI's 2D transform: x' = x * eM11 + y * eM21 + eDx, y' = x * eM12 + y * eM22 + eDy.
+struct XFORM {
+  float eM11, eM12, eM21, eM22, eDx, eDy;
+};
+
+// The GDI canvas rebuilt on stb_truetype outlines: the glyph path is filled
+// (nonzero) and stroked with a round pen at the same 4x supersampling.
+class GdiCanvas {
+ public:
+  GdiCanvas(int w, int h)
+      : w_(w * kTextScale), h_(h * kTextScale), bits_(size_t(w_) * h_, 0), font_(Font()) {}
+  bool ok() const { return font_ != nullptr; }
+
+  void SetFont(int px) {
+    // A negative GDI font height is the em size.
+    scale_ = stbtt_ScaleForMappingEmToPixels(font_, float(px * kTextScale));
+    // GDI's tmAscent / tmDescent are the OS/2 usWinAscent / usWinDescent;
+    // hhea stands in for a font without an OS/2 table.
+    int ascent = 0, descent = 0, line_gap = 0;
+    stbtt_GetFontVMetrics(font_, &ascent, &descent, &line_gap);
+    descent = -descent;
+    if (stbtt_uint32 os2 = stbtt__find_table(font_->data, font_->fontstart, "OS/2")) {
+      ascent = ttUSHORT(font_->data + os2 + 74);
+      descent = ttUSHORT(font_->data + os2 + 76);
+    }
+    middle_ = (std::round(ascent * scale_) - std::round(descent * scale_)) / 2.0f;
+  }
+  float Advance(wchar_t ch) {
+    int advance = 0, lsb = 0;
+    stbtt_GetCodepointHMetrics(font_, int(ch), &advance, &lsb);
+    return std::round(advance * scale_);
+  }
+  float MiddleAboveBaseline() const { return middle_; }
+
+  void Clear() { std::fill(bits_.begin(), bits_.end(), uint8_t(0)); }
+
+  void Draw(const std::wstring& text, const XFORM& t, int stroke_px) {
+    std::vector<std::vector<Point>> contours;
+    float pen = 0;
+    for (wchar_t ch : text) {
+      AppendGlyph(int(ch), pen, t, contours);
+      pen += Advance(ch);
+    }
+    Fill(contours);
+    if (stroke_px > 0) Stroke(contours, float(stroke_px));
+  }
+
+  float Coverage(int x, int y) const { return bits_[size_t(y) * w_ + x] / 255.0f; }
+  int width() const { return w_; }
+  int height() const { return h_; }
+
+ private:
+  struct Point {
+    float x, y;
+  };
+
+  // The best font fontconfig ranks for Palatino Linotype bold that
+  // stb_truetype can read, loaded once. Type 1, bitmap and CFF2 files are
+  // skipped for the next candidate. A variable font's named instance (face
+  // number in the low 16 bits of FC_INDEX, instance above) loads as its
+  // default instance.
+  static const stbtt_fontinfo* Font() {
+    static std::vector<unsigned char> data;
+    static stbtt_fontinfo info;
+    static const stbtt_fontinfo* font = [] () -> const stbtt_fontinfo* {
+      const stbtt_fontinfo* loaded = nullptr;
+      if (FcConfig* config = FcInitLoadConfigAndFonts()) {
+        if (FcPattern* pattern =
+                FcNameParse(reinterpret_cast<const FcChar8*>("Palatino Linotype:bold"))) {
+          FcConfigSubstitute(config, pattern, FcMatchPattern);
+          FcDefaultSubstitute(pattern);
+          FcResult result;
+          if (FcFontSet* fonts = FcFontSort(config, pattern, FcTrue, nullptr, &result)) {
+            for (int i = 0; i < fonts->nfont && !loaded; ++i) {
+              FcChar8* path = nullptr;
+              int index = 0;
+              if (FcPatternGetString(fonts->fonts[i], FC_FILE, 0, &path) != FcResultMatch) {
+                continue;
+              }
+              FcPatternGetInteger(fonts->fonts[i], FC_INDEX, 0, &index);
+              std::ifstream in(reinterpret_cast<const char*>(path), std::ios::binary);
+              data.assign(std::istreambuf_iterator<char>(in), {});
+              int offset =
+                  data.empty() ? -1 : stbtt_GetFontOffsetForIndex(data.data(), index & 0xFFFF);
+              if (offset >= 0 && stbtt_InitFont(&info, data.data(), offset)) {
+                REXLOG_INFO("Button glyphs: key label font {}",
+                            reinterpret_cast<const char*>(path));
+                loaded = &info;
+              }
+            }
+            FcFontSetDestroy(fonts);
+          }
+          FcPatternDestroy(pattern);
+        }
+        FcConfigDestroy(config);
+      }
+      if (!loaded) REXLOG_WARN("Button glyphs: no usable font for key labels");
+      return loaded;
+    }();
+    return font;
+  }
+
+  // Glyph outline with its baseline-left at (pen, 0), y down, flattened and
+  // transformed into canvas pixels.
+  void AppendGlyph(int codepoint, float pen, const XFORM& t,
+                   std::vector<std::vector<Point>>& contours) const {
+    stbtt_vertex* v = nullptr;
+    int n = stbtt_GetCodepointShape(font_, codepoint, &v);
+    auto map = [&](float fx, float fy) {
+      float x = pen + fx * scale_, y = -fy * scale_;
+      return Point{x * t.eM11 + y * t.eM21 + t.eDx, x * t.eM12 + y * t.eM22 + t.eDy};
+    };
+    constexpr int kSteps = 8;
+    float cx = 0, cy = 0;
+    for (int i = 0; i < n; ++i) {
+      const stbtt_vertex& e = v[i];
+      if (e.type == STBTT_vmove) {
+        contours.emplace_back();
+        contours.back().push_back(map(e.x, e.y));
+      } else if (contours.empty()) {
+        continue;
+      } else if (e.type == STBTT_vline) {
+        contours.back().push_back(map(e.x, e.y));
+      } else if (e.type == STBTT_vcurve) {
+        for (int s = 1; s <= kSteps; ++s) {
+          float u = float(s) / kSteps, a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c = u * u;
+          contours.back().push_back(
+              map(a * cx + b * e.cx + c * e.x, a * cy + b * e.cy + c * e.y));
+        }
+      } else if (e.type == STBTT_vcubic) {
+        for (int s = 1; s <= kSteps; ++s) {
+          float u = float(s) / kSteps, a = (1 - u) * (1 - u) * (1 - u),
+                b = 3 * u * (1 - u) * (1 - u), c = 3 * u * u * (1 - u), d = u * u * u;
+          contours.back().push_back(map(a * cx + b * e.cx + c * e.cx1 + d * e.x,
+                                        a * cy + b * e.cy + c * e.cy1 + d * e.y));
+        }
+      }
+      cx = e.x;
+      cy = e.y;
+    }
+    stbtt_FreeShape(font_, v);
+  }
+
+  // Nonzero fill, sampled at pixel centres.
+  void Fill(const std::vector<std::vector<Point>>& contours) {
+    std::vector<std::pair<float, int>> crossings;
+    for (int y = 0; y < h_; ++y) {
+      const float sy = y + 0.5f;
+      crossings.clear();
+      for (const auto& c : contours) {
+        for (size_t i = 0; i < c.size(); ++i) {
+          const Point& a = c[i];
+          const Point& b = c[(i + 1) % c.size()];
+          if ((a.y <= sy) == (b.y <= sy)) continue;
+          float x = a.x + (sy - a.y) / (b.y - a.y) * (b.x - a.x);
+          crossings.push_back({x, b.y > a.y ? 1 : -1});
+        }
+      }
+      std::sort(crossings.begin(), crossings.end());
+      int winding = 0;
+      for (size_t i = 0; i + 1 < crossings.size(); ++i) {
+        winding += crossings[i].second;
+        if (winding == 0) continue;
+        int x0 = std::max(0, int(std::ceil(crossings[i].first - 0.5f)));
+        int x1 = std::min(w_, int(std::ceil(crossings[i + 1].first - 0.5f)));
+        for (int x = x0; x < x1; ++x) bits_[size_t(y) * w_ + x] = 255;
+      }
+    }
+  }
+
+  // Round pen of radius r along every edge (round joins and caps).
+  void Stroke(const std::vector<std::vector<Point>>& contours, float r) {
+    for (const auto& c : contours) {
+      for (size_t i = 0; i < c.size(); ++i) {
+        const Point& a = c[i];
+        const Point& b = c[(i + 1) % c.size()];
+        int x0 = std::max(0, int(std::floor(std::min(a.x, b.x) - r)));
+        int x1 = std::min(w_ - 1, int(std::ceil(std::max(a.x, b.x) + r)));
+        int y0 = std::max(0, int(std::floor(std::min(a.y, b.y) - r)));
+        int y1 = std::min(h_ - 1, int(std::ceil(std::max(a.y, b.y) + r)));
+        float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+        for (int y = y0; y <= y1; ++y) {
+          for (int x = x0; x <= x1; ++x) {
+            float px = x + 0.5f - a.x, py = y + 0.5f - a.y;
+            float u = len2 > 0 ? std::clamp((px * dx + py * dy) / len2, 0.0f, 1.0f) : 0.0f;
+            float ex = px - u * dx, ey = py - u * dy;
+            if (ex * ex + ey * ey <= r * r) bits_[size_t(y) * w_ + x] = 255;
+          }
+        }
+      }
+    }
+  }
+
+  int w_, h_;
+  std::vector<uint8_t> bits_;
+  const stbtt_fontinfo* font_;
+  float scale_ = 0, middle_ = 0;
+};
+#endif
+
+// Box-filtered 1x coverage.
+Mask Downsample(const GdiCanvas& canvas) {
+  Mask m(canvas.width() / kTextScale, canvas.height() / kTextScale);
+  for (int y = 0; y < m.h; ++y) {
+    for (int x = 0; x < m.w; ++x) {
+      float sum = 0;
+      for (int sy = 0; sy < kTextScale; ++sy) {
+        for (int sx = 0; sx < kTextScale; ++sx) {
+          sum += canvas.Coverage(x * kTextScale + sx, y * kTextScale + sy);
+        }
+      }
+      m.at(x, y) = sum / float(kTextScale * kTextScale);
+    }
+  }
+  return m;
+}
 
 XFORM Translate(float x, float y) { return XFORM{1, 0, 0, 1, x, y}; }
 
@@ -372,7 +584,7 @@ Mask CenteredText(int w, int h, const std::wstring& text, const float box[4], in
   float ink_cx = (x0 + x1 + 1) / 2.0f - ox, ink_cy = (y0 + y1 + 1) / 2.0f - oy;
   float cx = (box[0] + box[2]) / 2.0f * kTextScale, cy = (box[1] + box[3]) / 2.0f * kTextScale;
   canvas.Draw(text, Translate(cx - ink_cx, cy - ink_cy), 0);
-  return canvas.Downsample();
+  return Downsample(canvas);
 }
 
 // Letters upright along a circle (angles in degrees, 0 = right, -90 = up).
@@ -403,7 +615,7 @@ TextLayer ArchedText(int w, int h, const std::wstring& text, float cx, float cy,
       canvas.Draw(std::wstring(1, text[i]), t, pass == 0 ? stroke_px : 0);
       angle += (widths[i] + spacing) / r;
     }
-    (pass == 0 ? layer.outline : layer.fill) = canvas.Downsample();
+    (pass == 0 ? layer.outline : layer.fill) = Downsample(canvas);
   }
   return layer;
 }

@@ -3,6 +3,7 @@
 #include <rex/cvar.h>
 #include <rex/logging/macros.h>
 
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -10,6 +11,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include "renderdoc_app.h"
 
@@ -29,11 +33,19 @@ int g_swaps_left = 0;
 RENDERDOC_API_1_1_2* Api() {
   if (!g_api_looked_up) {
     g_api_looked_up = true;
+#ifdef _WIN32
     if (HMODULE module = GetModuleHandleA("renderdoc.dll")) {
       auto get_api =
           reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(module, "RENDERDOC_GetAPI"));
       if (get_api) get_api(eRENDERDOC_API_Version_1_1_2, reinterpret_cast<void**>(&g_api));
     }
+#else
+    // RTLD_NOLOAD: only attach when RenderDoc already injected itself.
+    if (void* module = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD)) {
+      auto get_api = reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(module, "RENDERDOC_GetAPI"));
+      if (get_api) get_api(eRENDERDOC_API_Version_1_1_2, reinterpret_cast<void**>(&g_api));
+    }
+#endif
   }
   return g_api;
 }
