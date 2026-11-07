@@ -1,0 +1,1 @@
+Vendored from https://github.com/bylaws/libadrenotools at 8fae8ce (linkernsbypass aa39758). BSD-2-Clause; see LICENSE.

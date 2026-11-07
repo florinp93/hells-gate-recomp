@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Vulkan 1.1 is the floor for the Xenos GPU backend. -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+
+    <application
+        android:name=".App"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
+        android:isGame="true"
+        android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true">
+
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".HellsGateActivity"
+            android:exported="false"
+            android:theme="@style/GameTheme"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboardHidden|keyboard|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density|navigation|locale|layoutDirection|colorMode|fontScale"
+            android:preferMinimalPostProcessing="true" />
+    </application>
+</manifest>

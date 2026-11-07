@@ -39,9 +39,13 @@ endif()
 
 set(DANTESINFERNO_SOURCES
     src/main.cpp
+    src/asset_hooks.cpp
+    src/audio_hooks.cpp
     src/damage_hooks.cpp
+    src/fence_wait_hooks.cpp
     src/frame_rate_hooks.cpp
     src/memory_hooks.cpp
+    src/movie_hooks.cpp
     src/timer_resolution.cpp
     src/user_paths.cpp
     src/overlay/achievement_sound.cpp
@@ -56,17 +60,50 @@ set(DANTESINFERNO_SOURCES
     src/renderer/guest_gpu_state.cpp
 )
 
+if(NOT DANTESINFERNO_NATIVE_RENDERER)
+    # The D3D hook layer only exists to feed the native renderer (draw hooks,
+    # state verifier, RenderDoc capture); without it the SDK's Xenos backend
+    # (rexgpu-xenos) renders and nothing calls into these.
+    list(REMOVE_ITEM DANTESINFERNO_SOURCES
+        src/renderer/d3d_hooks.cpp
+        src/renderer/renderdoc_capture.cpp
+        src/renderer/state_verifier.cpp
+        src/renderer/guest_gpu_state.cpp
+    )
+    list(APPEND DANTESINFERNO_SOURCES src/renderer/renderer_stub.cpp)
+    if(ANDROID)
+        list(APPEND DANTESINFERNO_SOURCES src/android_hook_stubs.cpp)
+    endif()
+endif()
+
+if(ANDROID)
+    list(APPEND DANTESINFERNO_SOURCES src/android_vulkan_driver.cpp)
+endif()
+
 if(WIN32)
     list(APPEND DANTESINFERNO_SOURCES src/dantes_inferno.rc)
     add_executable(dantes_inferno WIN32 ${DANTESINFERNO_SOURCES})
     # A PDB in every build, so crash reports' addresses map to function names
     # (archived per release, not shipped).
     target_link_options(dantes_inferno PRIVATE "LINKER:/DEBUG")
+elseif(ANDROID)
+    # SDLActivity loads libmain.so and calls its exported SDL_main.
+    add_library(dantes_inferno SHARED ${DANTESINFERNO_SOURCES})
+    set_target_properties(dantes_inferno PROPERTIES OUTPUT_NAME main)
 else()
     add_executable(dantes_inferno ${DANTESINFERNO_SOURCES})
 endif()
 
 rexglue_setup_target(dantes_inferno)
+if(ANDROID)
+    # Custom Vulkan drivers (Turnip). Builds libadrenotools statically into
+    # libmain.so plus its hook libraries (libhook_impl.so, libmain_hook.so,
+    # libfile_redirect_hook.so), which must ship next to libmain.so.
+    set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
+    add_subdirectory(thirdparty/libadrenotools EXCLUDE_FROM_ALL)
+    target_link_libraries(dantes_inferno PRIVATE adrenotools)
+    add_dependencies(dantes_inferno main_hook file_redirect_hook hook_impl)
+endif()
 if(DANTESINFERNO_DEV_CHEATS)
     target_compile_definitions(dantes_inferno PRIVATE DANTESINFERNO_DEV_CHEATS)
 endif()

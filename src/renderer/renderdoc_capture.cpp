@@ -3,6 +3,7 @@
 #include <rex/cvar.h>
 #include <rex/logging/macros.h>
 
+#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -12,12 +13,14 @@
 #include <windows.h>
 
 #include "renderdoc_app.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(rdoc_capture_frame, false, "Diagnostics",
                     "Under RenderDoc: capture the GPU work of the next guest frames "
                     "(swap to swap, Insert)");
 
 namespace renderer {
+#if defined(_WIN32)
 namespace {
 
 constexpr int kCapturedSwaps = 2;
@@ -59,5 +62,10 @@ void RenderDocOnGuestSwap() {
   g_swaps_left = kCapturedSwaps;
   REXLOG_INFO("RenderDoc: capturing {} guest frames", kCapturedSwaps);
 }
+
+#else
+// RenderDoc capture hooks are only wired up on Windows.
+void RenderDocOnGuestSwap() {}
+#endif
 
 }  // namespace renderer

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+
 #include "overlay/achievement_sound.h"
 #include "path_util.h"
 #include "overlay/achievement_ui.h"
@@ -61,6 +63,10 @@ REXCVAR_DEFINE_BOOL(achievement_preview, false, "UI",
 REXCVAR_DEFINE_STRING(glyph_family, "auto", "UI",
                       "Button glyphs: auto (follow the controller in use), xbox360, playstation4, "
                       "playstation5 or keyboard");
+
+REXCVAR_DEFINE_STRING(render_resolution, "", "Graphics",
+                      "Game render size WxH up to 1280x720, e.g. 960x540 (empty = 1280x720)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_DOUBLE(ultrawide_target_aspect, 0.0, "Graphics",
                       "Target aspect ratio for ultrawide (0=disabled, 1.7778=16:9, "
@@ -165,6 +171,13 @@ class DantesInfernoApp : public rex::ReXApp {
 
     double target_aspect = REXCVAR_GET(ultrawide_target_aspect);
     if (target_aspect > 0.0) g_ultrawide_target_aspect = static_cast<float>(target_aspect);
+    {
+      unsigned w = 0, h = 0;
+      if (std::sscanf(REXCVAR_GET(render_resolution).c_str(), "%ux%u", &w, &h) == 2) {
+        g_render_width = w;
+        g_render_height = h;
+      }
+    }
     REXLOG_INFO("ULTRAWIDE: target_aspect={:.4f}", target_aspect);
   }
 
@@ -196,6 +209,7 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnPreLaunchModule() override {
     uint8_t* membase = runtime()->memory()->virtual_membase();
+    g_guest_membase = membase;
 
     if (rex::memory::load_and_swap<uint32_t>(membase + 0x82879110) != 0x3C8082CEu) {
       auto msg = fmt::format(
@@ -327,6 +341,49 @@ class DantesInfernoApp : public rex::ReXApp {
     saved_vsync_ = rex::cvar::Query<bool>("vsync");
 
     if (REXCVAR_GET(show_fps_overlay)) CreateFpsOverlay();
+
+#if defined(__ANDROID__)
+    // Android: log the guest frame rate every 5 s (the Java side logs per-thread CPU use).
+    perf_thread_ = std::thread([this] {
+      uint32_t last = 0;
+      auto last_t = std::chrono::steady_clock::now();
+      // Polled every 2 ms so single long frames show up, not only the 5 s average.
+      uint32_t seen = 0;
+      auto seen_t = last_t;
+      double worst_ms = 0;
+      uint32_t slow = 0;
+      while (!shutting_down_.load()) {
+        auto* cp = GetCommandProcessor();
+        for (int i = 0; i < 2500 && !shutting_down_.load(); ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+          if (!cp) continue;
+          uint32_t c = cp->swap_counter();
+          if (c == seen) continue;
+          auto t = std::chrono::steady_clock::now();
+          if (seen != 0) {
+            double ms = std::chrono::duration<double, std::milli>(t - seen_t).count() / (c - seen);
+            worst_ms = std::max(worst_ms, ms);
+            if (ms > 50.0) ++slow;
+          }
+          seen = c;
+          seen_t = t;
+        }
+        if (!cp) continue;
+        uint32_t now = cp->swap_counter();
+        auto t = std::chrono::steady_clock::now();
+        double secs = std::chrono::duration<double>(t - last_t).count();
+        if (last != 0 && secs > 0) {
+          REXLOG_INFO("PERF: guest {:.1f} fps ({} frames in {:.1f} s), worst frame {:.0f} ms, "
+                      "{} over 50 ms",
+                      (now - last) / secs, now - last, secs, worst_ms, slow);
+        }
+        worst_ms = 0;
+        slow = 0;
+        last = now;
+        last_t = t;
+      }
+    });
+#endif
 
     rex::ui::RegisterBind("bind_fps_overlay", "F1", "Toggle FPS overlay", [this] {
       if (fps_overlay_) {
@@ -533,6 +590,7 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnShutdown() override {
     shutting_down_ = true;
+    if (perf_thread_.joinable()) perf_thread_.join();
     renderer::SetOverlayFrameRequest(nullptr);
     renderer::Stop();
     overlay::ShutdownAchievementSound();
@@ -593,8 +651,14 @@ class DantesInfernoApp : public rex::ReXApp {
   }
 
   rex::graphics::CommandProcessor* GetCommandProcessor() {
+#if defined(__ANDROID__)
+    // GraphicsSystem lives in the rexgpu-xenos plugin (hidden typeinfo): no RTTI.
+    auto* graphics = static_cast<rex::graphics::GraphicsSystem*>(
+        runtime() ? runtime()->graphics_system() : nullptr);
+#else
     auto* graphics = dynamic_cast<rex::graphics::GraphicsSystem*>(
         runtime() ? runtime()->graphics_system() : nullptr);
+#endif
     return graphics ? graphics->command_processor() : nullptr;
   }
 
@@ -604,5 +668,6 @@ class DantesInfernoApp : public rex::ReXApp {
   overlay::AchievementToast* achievement_toast_ = nullptr;
   std::atomic<bool> overlay_frame_pending_{false};
   std::atomic<bool> shutting_down_{false};
+  std::thread perf_thread_;
   bool saved_vsync_ = true;
 };

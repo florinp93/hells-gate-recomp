@@ -15,6 +15,11 @@ address = 0x824D6B90
 name = "UltrawideAspectHook"
 registers = ["f0"]
 
+[[midasm_hook]]
+address = 0x824D6B94
+name = "RenderSizeHook"
+registers = ["r29", "r30"]
+
 [entrypoint.functions.0x8221FE10]
 name = "unresolved_target_8221FE10"
 
