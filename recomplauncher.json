@@ -1,0 +1,96 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Hell's Gate",
+  "repo": "florinp93/hells-gate-recomp",
+  "game": {
+    "kind": "folder",
+    "label": "Your Dante's Inferno Xbox 360 game files: the folder with default.xex (extract your disc image with extract-xiso).",
+    "check": { "file": "default.xex" }
+  },
+  "start": {
+    "program": ["dantes_inferno.exe", "dantes_inferno"],
+    "args": ["--game", "{game}", "--renderer=dante"]
+  },
+  "folders": {
+    "userdata": [
+      { "path": "{install}/userdata", "if": "{install}/portable.txt" },
+      { "path": "{documents}/dantes_inferno" }
+    ],
+    "logs": [
+      { "path": "{install}/logs" }
+    ]
+  },
+  "settings": [
+    {
+      "id": "frame_rate", "label": "Frame rate", "in": "args",
+      "help": "The game runs at 60 on the console. Higher rates are smoother; menus and minigames stay at the right speed. Use a rate your screen can show.",
+      "choices": [
+        { "label": "60", "args": [] },
+        { "label": "120", "args": ["--video_mode_refresh_rate=120"] },
+        { "label": "180", "args": ["--video_mode_refresh_rate=180"] },
+        { "label": "240", "args": ["--video_mode_refresh_rate=240"] }
+      ]
+    },
+    {
+      "id": "resolution", "label": "Resolution", "in": "args",
+      "help": "What the game draws at. Automatic uses your screen's own resolution.",
+      "choices": [
+        { "label": "Automatic", "args": [] },
+        { "label": "1280 x 720", "args": ["--dante_resolution=1280x720"] },
+        { "label": "1920 x 1080", "args": ["--dante_resolution=1920x1080"] },
+        { "label": "2560 x 1440", "args": ["--dante_resolution=2560x1440"] },
+        { "label": "3840 x 2160", "args": ["--dante_resolution=3840x2160"] }
+      ]
+    },
+    {
+      "id": "aspect", "label": "Aspect ratio", "in": "args",
+      "help": "The shape of the picture. Automatic matches the resolution, so ultrawide screens get the wide view.",
+      "choices": [
+        { "label": "Automatic", "args": [] },
+        { "label": "4:3", "args": ["--ultrawide_target_aspect=1.3333"] },
+        { "label": "16:9", "args": ["--ultrawide_target_aspect=1.7778"] },
+        { "label": "21:9", "args": ["--ultrawide_target_aspect=2.3704"] },
+        { "label": "32:9", "args": ["--ultrawide_target_aspect=3.5556"] }
+      ]
+    },
+    {
+      "id": "window", "label": "Window", "in": "args",
+      "help": "Fullscreen fills your screen. Windowed lets you switch apps quickly.",
+      "choices": [
+        { "label": "Fullscreen", "args": [] },
+        { "label": "Windowed", "args": ["--fullscreen=false"] }
+      ]
+    },
+    {
+      "id": "smaa", "label": "Anti-aliasing", "in": "args",
+      "help": "SMAA smooths jagged edges. Costs little.",
+      "choices": [
+        { "label": "SMAA", "args": [] },
+        { "label": "Off", "args": ["--dante_smaa=false"] }
+      ]
+    },
+    {
+      "id": "shadows", "label": "Shadow quality", "in": "args",
+      "help": "The size of the shadow maps. Higher is sharper and needs a faster graphics card.",
+      "choices": [
+        { "label": "Normal", "args": ["--dante_shadow_scale=1"] },
+        { "label": "High", "args": [] },
+        { "label": "Ultra", "args": ["--dante_shadow_scale=4"] }
+      ]
+    },
+    {
+      "id": "fps", "label": "Show FPS", "in": "args",
+      "help": "The frame rate in the top left corner of the game.",
+      "choices": [
+        { "label": "Off", "args": [] },
+        { "label": "On", "args": ["--show_fps_overlay=true"] }
+      ]
+    }
+  ],
+  "actions": [
+    { "id": "userdata", "label": "Saves and settings", "help": "Your saves and the shader cache.", "open": "userdata" },
+    { "id": "logs", "label": "Logs", "help": "The game's logs, to send with a bug report.", "open": "logs" },
+    { "id": "cache", "label": "Shader cache", "help": "Shaders the game has built. Clearing only helps if graphics look wrong after an update.", "clear": "userdata/cache" }
+  ]
+}

@@ -155,5 +155,8 @@ if [[ -n "$WAYLAND_PLUGIN_SRC" && -f "$WAYLAND_PLUGIN_SRC" ]]; then
   done
 fi
 
+# RecompLauncher reads this from the AppImage root; every release ships it.
+install -m644 "$ROOT/recomplauncher.json" "$APPDIR/recomplauncher.json"
+
 ARCH=aarch64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT"
 echo "Created: $OUTPUT"
