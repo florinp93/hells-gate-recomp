@@ -80,6 +80,26 @@ REXCVAR_DEFINE_STRING(dlc_source_path, "dlc", "Content",
                       "Folder scanned for DLC packages to auto-install on launch. "
                       "If empty or missing, the game runs without DLC.");
 
+REXCVAR_DEFINE_STRING(game, "", "Content",
+                      "Folder with your extracted Xbox 360 game files (default.xex), for "
+                      "launchers and scripts. Same as --game_data_root, and it puts the bundled "
+                      "Title Update next to the game when that is missing.");
+
+namespace {
+
+// The game cannot start without TU2 next to default.xex. The release keeps a copy in tu/ for
+// this, and the launcher does the same for the game files it imports.
+void EnsureTitleUpdate(const std::filesystem::path& game_dir) {
+  std::error_code ec;
+  auto target = game_dir / "default.xexp";
+  if (std::filesystem::exists(target, ec)) return;
+  auto source = rex::filesystem::GetExecutableFolder() / "tu" / "default.xexp";
+  if (!std::filesystem::exists(source, ec)) return;
+  std::filesystem::copy_file(source, target, ec);
+}
+
+}  // namespace
+
 class DantesInfernoApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -91,6 +111,15 @@ class DantesInfernoApp : public rex::ReXApp {
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
     user_paths::Configure(paths);
+
+    std::string game_arg = REXCVAR_GET(game);
+    if (!game_arg.empty()) {
+      std::filesystem::path game_dir(std::u8string(game_arg.begin(), game_arg.end()));
+      paths.game_data_root = game_dir;
+      EnsureTitleUpdate(game_dir);
+      return;
+    }
+
     if (!paths.game_data_root.empty()) return;
 
     std::error_code config_ec;

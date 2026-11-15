@@ -25,6 +25,10 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://recomplauncher.com/game/hells-gate-recomp"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+</p>
+
 ---
 
 Hell's Gate is a PC port of **Dante's Inferno** built with the
@@ -108,6 +112,7 @@ options as command-line flags.
 | SMAA | `--dante_smaa=true` | On by default |
 | Shadow quality | `--dante_shadow_scale=2` | Shadow map scale, 1–4 |
 | Renderer | `--renderer=dante` | `xenos` is the D3D12 fallback (see below) |
+| Game files | `--game=PATH` | Folder with the extracted game (`default.xex`). Same as `--game_data_root`, and it copies `tu/default.xexp` next to the game if missing |
 
 If the native renderer misbehaves on your machine, set
 `renderer_override` in `dantes_inferno.toml` to fall back to the emulated

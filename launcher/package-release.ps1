@@ -90,6 +90,8 @@ foreach ($f in @("DantesInfernoLauncher.exe", "DantesInferno.Shared.dll", "versi
     Copy-Item (Join-Path $launcherBin $f) $staging
 }
 Copy-Item (Join-Path $root "icon.ico"), (Join-Path $root "banner.jpg"), $extractXiso $staging
+# RecompLauncher reads this from the top of the zip; every release ships it.
+Copy-Item (Join-Path $root "..\recomplauncher.json") $staging
 New-Item -ItemType Directory -Path (Join-Path $staging "tu") -Force | Out-Null
 Copy-Item $tuDst (Join-Path $staging "game")
 Copy-Item $tuDst (Join-Path $staging "tu")
