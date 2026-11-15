@@ -99,7 +99,8 @@ startup.
 ## ⚙️ Settings
 
 Everything below is exposed in the launcher. Advanced users can pass the same
-options as command-line flags.
+options as command-line flags to `dantes_inferno.exe`; the full list is in
+[`docs/command_line_flags.md`](docs/command_line_flags.md).
 
 | Setting | Flag | Notes |
 |---|---|---|
@@ -291,6 +292,7 @@ does and also clones DiligentCore and applies its patch:
 | [Native renderer design](docs/NATIVE_RENDERER_DESIGN.md) | How the D3D layer is replaced, milestones |
 | [Native D3D map](docs/NATIVE_D3D_MAP.md) | The game's Direct3D entry points |
 | [Frame rate](docs/frame_rate.md) | How high refresh rates are made to work |
+| [Command-line flags](docs/command_line_flags.md) | Every `--flag`, its values and defaults |
 | [VP6 FMV fix](docs/vp6_fmv_corruption_fix.md) | Video corruption root cause and fix |
 | [Linux cross-compile](docs/linux-cross-compile.md) | Building on Linux, running under Proton |
 | [ReXGlue notes](docs/rexglue_notes.md) | SDK notes and patches |
