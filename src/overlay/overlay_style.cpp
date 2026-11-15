@@ -1,4 +1,5 @@
 #include "overlay_style.h"
+#include "path_util.h"
 
 #include <rex/logging/macros.h>
 #include <rex/ui/window.h>
@@ -87,7 +88,7 @@ void LoadFonts(ImFontAtlas* atlas, rex::ui::Window* window) {
     ImFont* font = nullptr;
     std::filesystem::path path = FindFontFile(spec.weight);
     if (!path.empty()) {
-      font = atlas->AddFontFromFileTTF(path.string().c_str(), config.SizePixels, &config,
+      font = atlas->AddFontFromFileTTF(path_util::Utf8(path).c_str(), config.SizePixels, &config,
                                        kGlyphRanges);
     }
     if (!font) {

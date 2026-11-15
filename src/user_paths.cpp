@@ -52,7 +52,7 @@ void Configure(rex::PathConfig& paths) {
     g_choice = Choice::kPortable;
   } else if (!IsWritableFolder(paths.user_data_root)) {
 #ifdef _WIN32
-    if (const char* local = std::getenv("LOCALAPPDATA"); local && *local) {
+    if (const wchar_t* local = _wgetenv(L"LOCALAPPDATA"); local && *local) {
       user_dir = std::filesystem::path(local) / paths.user_data_root.filename();
       g_choice = Choice::kDocumentsBlocked;
       g_blocked_documents = paths.user_data_root;

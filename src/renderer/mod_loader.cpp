@@ -1,4 +1,5 @@
 #include "mod_loader.h"
+#include "path_util.h"
 
 #include "Common/interface/RefCntAutoPtr.hpp"
 #include "Graphics/GraphicsEngine/interface/RenderDevice.h"
@@ -172,14 +173,14 @@ struct ModLoader::Impl {
       for (const auto& entry : std::filesystem::recursive_directory_iterator(textures_dir, ec)) {
         if (!entry.is_regular_file()) continue;
         auto path = entry.path();
-        auto extension = path.extension().string();
+        auto extension = path_util::Utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
         uint64_t hash;
-        if (extension != ".dds" || !ParseHash(path.stem().string(), hash)) continue;
+        if (extension != ".dds" || !ParseHash(path_util::Utf8(path.stem()), hash)) continue;
         files[hash] = path;
         ++count;
       }
-      REXLOG_INFO("ModLoader: {} ({} textures)", mod.filename().string(), count);
+      REXLOG_INFO("ModLoader: {} ({} textures)", path_util::Utf8(mod.filename()), count);
     }
   }
 
@@ -203,10 +204,11 @@ struct ModLoader::Impl {
     if (texture) {
       const auto& desc = texture->GetDesc();
       REXLOG_INFO("ModLoader: {:016X} -> {} ({}x{}, {} levels)", hash,
-                  file->second.filename().string(), desc.Width, desc.Height, desc.MipLevels);
+                  path_util::Utf8(file->second.filename()), desc.Width, desc.Height,
+                  desc.MipLevels);
       ++replaced;
     } else {
-      REXLOG_WARN("ModLoader: cannot load {}", file->second.string());
+      REXLOG_WARN("ModLoader: cannot load {}", path_util::Utf8(file->second));
     }
     return textures.emplace(hash, texture).first->second;
   }
@@ -218,7 +220,7 @@ ModLoader::ModLoader(dl::IRenderDevice* device, const std::filesystem::path& mod
   impl_->capture = REXCVAR_GET(mod_capture);
   if (REXCVAR_GET(mods_enabled)) impl_->Scan(mods_dir);
   REXLOG_INFO("ModLoader: {} replacement textures in {}{}", impl_->files.size(),
-              mods_dir.string(), impl_->capture ? ", capture on" : "");
+              path_util::Utf8(mods_dir), impl_->capture ? ", capture on" : "");
 }
 
 ModLoader::~ModLoader() = default;
