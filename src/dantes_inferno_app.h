@@ -27,6 +27,7 @@
 #include <rex/rex_app.h>
 #include <rex/system.h>
 #include <rex/system/function_dispatcher.h>
+#include <rex/system/interfaces/graphics.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xam/content_manager.h>
@@ -139,7 +140,19 @@ class DantesInfernoApp : public rex::ReXApp {
     return toast;
   }
 
+  bool SetupPresentation() override {
+    if (rex::ReXApp::SetupPresentation()) return true;
+    if (runtime_config_ && runtime_config_->graphics && !runtime_config_->graphics->presenter()) {
+      ShowFatalError(
+          "No usable graphics device was found.\n\nDante's Inferno needs a graphics card with "
+          "Direct3D 12 (feature level 11_0) or Vulkan 1.1. Update the graphics driver. If there "
+          "is no newer driver, this graphics card is not supported.");
+    }
+    return false;
+  }
+
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    runtime_config_ = &config;
     crash_log::Install();
     config.gpu_plugin = "xenos";
 
@@ -254,7 +267,11 @@ class DantesInfernoApp : public rex::ReXApp {
     user_paths::Report(user_data_root());
     renderer::ConfigureSyncOnlyGpu();
     if (rex::cvar::Query<std::string>("renderer") == "dante") {
-      renderer::Start(window(), cache_root());
+      std::string error;
+      if (!renderer::Start(window(), cache_root(), error)) {
+        ShowFatalError(error);
+        std::_Exit(1);
+      }
       // The SDK presenter is detached: ImGui records on the UI thread and the
       // renderer draws the overlay over each presented frame.
       if (imgui_drawer()) {
@@ -580,6 +597,12 @@ class DantesInfernoApp : public rex::ReXApp {
       "bind_verify_gpu_state", "bind_fast_forward",
   };
 
+  static void ShowFatalError(const std::string& message) {
+    REXLOG_CRITICAL("{}", message);
+    if (auto logger = rex::GetLogger()) logger->flush();
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, message);
+  }
+
   // Achievement icons are textures of the drawer that draws ImGui.
   rex::ui::ImmediateDrawer* IconDrawer() const {
     return overlay_drawer_ ? overlay_drawer_.get() : immediate_drawer();
@@ -629,6 +652,7 @@ class DantesInfernoApp : public rex::ReXApp {
   std::unique_ptr<overlay::ShaderProgress> shader_progress_;
   std::unique_ptr<renderer::OverlayDrawer> overlay_drawer_;
   overlay::AchievementToast* achievement_toast_ = nullptr;
+  rex::RuntimeConfig* runtime_config_ = nullptr;
   std::atomic<bool> overlay_frame_pending_{false};
   std::atomic<bool> shutting_down_{false};
   bool saved_vsync_ = true;

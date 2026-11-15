@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <string>
 
 namespace rex::ui {
 class Window;
@@ -40,7 +41,7 @@ uint32_t CommandBufferWritePtr(uint32_t device, const uint8_t* base);
 // UI thread, after GPU setup. Detaches the SDK presenter from the window.
 // cache_dir: where the pipeline storage lives (empty: not recorded). Starts
 // building the stored shaders and pipelines in the background.
-bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir);
+bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir, std::string& error);
 
 // Shaders and pipelines built before the game starts (Start).
 struct PrecompileStatus {

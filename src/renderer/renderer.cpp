@@ -1404,18 +1404,25 @@ void PresentTestPattern() {
 
 }  // namespace
 
-bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir) {
+bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir, std::string& error) {
+  constexpr uint32_t kMinVulkanMajor = 1, kMinVulkanMinor = 1;
   std::lock_guard lock(g_mutex);
   if (g_device) return true;
   void* hwnd = window ? window->GetNativeWindowHandle() : nullptr;
   if (!hwnd) {
     REXLOG_ERROR("DanteDevice: no game window");
+    error = "The game window could not be created.";
     return false;
   }
   window->SetPresenter(nullptr);
   auto device = std::make_unique<VulkanDevice>();
   if (!device->Initialize(hwnd, 1280, 720)) {
     REXLOG_ERROR("DanteDevice: native device initialization failed");
+    error = fmt::format(
+        "Vulkan could not be started on this graphics card.\n\nDante's Inferno needs a graphics "
+        "card with Vulkan {}.{} or newer. Update the graphics driver. If there is no newer "
+        "driver, this graphics card is not supported.",
+        kMinVulkanMajor, kMinVulkanMinor);
     return false;
   }
   const dl::GraphicsAdapterInfo& adapter = device->RenderDevice()->GetAdapterInfo();
@@ -1425,6 +1432,18 @@ bool Start(rex::ui::Window* window, const std::filesystem::path& cache_dir) {
               // CPU-visible VRAM (Resizable BAR) is reported as unified memory.
               (adapter.Memory.LocalMemory + adapter.Memory.UnifiedMemory) >> 20,
               device_info.APIVersion.Major, device_info.APIVersion.Minor);
+  if (device_info.APIVersion.Major < kMinVulkanMajor ||
+      (device_info.APIVersion.Major == kMinVulkanMajor &&
+       device_info.APIVersion.Minor < kMinVulkanMinor)) {
+    REXLOG_ERROR("DanteDevice: Vulkan {}.{} or newer is required", kMinVulkanMajor,
+                 kMinVulkanMinor);
+    error = fmt::format(
+        "{} reports Vulkan {}.{}. Dante's Inferno needs Vulkan {}.{} or newer.\n\nUpdate the "
+        "graphics driver. If there is no newer driver, this graphics card is not supported.",
+        adapter.Description, device_info.APIVersion.Major, device_info.APIVersion.Minor,
+        kMinVulkanMajor, kMinVulkanMinor);
+    return false;
+  }
   RenderScale scale = ComputeRenderScale(window);
   device->SetDisplayAspect(scale.display_aspect, true);
   g_device = std::move(device);
