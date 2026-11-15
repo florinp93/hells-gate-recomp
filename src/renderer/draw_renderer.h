@@ -87,7 +87,16 @@ class DrawRenderer {
 
   void LogStats();
 
+  struct Counts {
+    size_t pipelines = 0, uploaded_ranges = 0, missing_textures = 0;
+  };
+  Counts GetCounts() const;
+
  private:
+  bool DrawUnchecked(const rex::graphics::RegisterFile& regs, const TranslatedShaders& shaders,
+                     const DrawTargets& targets, const uint8_t* base, bool log,
+                     uint32_t volatile_fetch);
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

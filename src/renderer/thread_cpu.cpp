@@ -16,7 +16,9 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
 #include <tlhelp32.h>
+#pragma comment(lib, "psapi.lib")
 #endif
 
 REXCVAR_DEFINE_BOOL(profile_threads, false, "Diagnostics",
@@ -250,10 +252,24 @@ std::string BusiestThreads(double window_seconds) {
   return out;
 }
 
+bool ProcessMemory(uint64_t& private_bytes, uint64_t& working_set) {
+  PROCESS_MEMORY_COUNTERS_EX counters{};
+  counters.cb = sizeof(counters);
+  if (!GetProcessMemoryInfo(GetCurrentProcess(),
+                            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                            sizeof(counters))) {
+    return false;
+  }
+  private_bytes = counters.PrivateUsage;
+  working_set = counters.WorkingSetSize;
+  return true;
+}
+
 #else
 
 std::string BusiestThreads(double) { return {}; }
 std::string HotSpots() { return {}; }
+bool ProcessMemory(uint64_t&, uint64_t&) { return false; }
 
 #endif
 

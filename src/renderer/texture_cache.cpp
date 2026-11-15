@@ -9,6 +9,7 @@
 #include "Graphics/GraphicsEngine/interface/Sampler.h"
 #include "Graphics/GraphicsEngine/interface/Texture.h"
 #include "Graphics/GraphicsEngine/interface/TextureView.h"
+#include "Primitives/interface/ReferenceCounters.h"
 
 #include <rex/graphics/pipeline/texture/conversion.h>
 #include <rex/graphics/pipeline/texture/info.h>
@@ -25,6 +26,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
+#include <new>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -210,6 +213,28 @@ uint32_t Log2BytesPerBlock(uint32_t bpb) {
   return bpb >= 16 ? 4 : bpb >= 8 ? 3 : bpb >= 4 ? 2 : bpb >= 2 ? 1 : 0;
 }
 
+constexpr uint64_t kMaxTextureBytes = 256ull << 20;
+constexpr uint32_t kFailuresLogged = 16;
+
+bool FitsPhysical(uint32_t address, uint64_t size) {
+  return size <= guest::kPhysicalMemorySize && guest::IsPhysicalRange(address, uint32_t(size));
+}
+
+struct ViewKey {
+  dl::ITexture* texture;
+  uint32_t swizzle;
+  dl::TEXTURE_FORMAT format;
+  dl::RESOURCE_DIMENSION dimension;
+  bool operator==(const ViewKey&) const = default;
+};
+struct ViewKeyHash {
+  size_t operator()(const ViewKey& k) const {
+    const uint64_t fields[3] = {uint64_t(reinterpret_cast<uintptr_t>(k.texture)), k.swizzle,
+                                (uint64_t(k.format) << 8) | uint64_t(k.dimension)};
+    return size_t(XXH3_64bits(fields, sizeof(fields)));
+  }
+};
+
 }  // namespace
 
 struct TextureCache::Impl {
@@ -219,7 +244,7 @@ struct TextureCache::Impl {
   Replacer replacer;
   // Key: XXH3 of the fetch dwords identifying the texture data.
   std::unordered_map<uint64_t, GuestTextureEntry> textures;
-  std::unordered_map<uint64_t, dl::RefCntAutoPtr<dl::ITextureView>> views;
+  std::unordered_map<ViewKey, dl::RefCntAutoPtr<dl::ITextureView>, ViewKeyHash> views;
   std::unordered_map<uint64_t, dl::RefCntAutoPtr<dl::ISampler>> samplers;
   std::set<uint32_t> reported_formats;
   std::vector<uint8_t> staging;
@@ -227,6 +252,103 @@ struct TextureCache::Impl {
   uint64_t uploaded_bytes = 0;
   uint64_t last_frame = 0;
   uint64_t evicted = 0;
+  uint64_t evicted_views = 0;
+  uint32_t failures = 0;
+
+  dl::ITextureView* View2D(const uint32_t fetch_dwords[6], const uint8_t* base, uint64_t frame,
+                           char* source, bool is_signed);
+  dl::ITextureView* ViewCube(const uint32_t fetch_dwords[6], const uint8_t* base, uint64_t frame,
+                             char* source, bool is_signed);
+  dl::ITextureView* View3D(const uint32_t fetch_dwords[6], const uint8_t* base, uint64_t frame,
+                           char* source, bool is_signed);
+
+  void ReportFailure(const char* kind, const char* what, uint64_t bytes) {
+    if (++failures > kFailuresLogged) return;
+    REXLOG_WARN("NATIVE-TEX {} texture failed: {} ({} KB, failure {}, textures={} views={})", kind,
+                what, bytes >> 10, failures, textures.size(), views.size());
+  }
+
+  template <typename Body>
+  dl::ITextureView* Guard(const char* kind, Body&& body) {
+    for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+      try {
+        return body();
+      } catch (const std::bad_alloc&) {
+        ReportFailure(kind, attempt ? "out of memory" : "out of memory, evicting and retrying", 0);
+        try {
+          Evict(last_frame, 1);
+        } catch (...) {
+          return nullptr;
+        }
+      } catch (const std::exception& e) {
+        ReportFailure(kind, e.what(), 0);
+        return nullptr;
+      } catch (...) {
+        ReportFailure(kind, "unknown exception", 0);
+        return nullptr;
+      }
+    }
+    return nullptr;
+  }
+
+  bool Allocate(std::vector<uint8_t>& data, size_t size, const char* kind) {
+    if (size > kMaxTextureBytes) {
+      ReportFailure(kind, "size out of range", size);
+      return false;
+    }
+    for (uint32_t attempt = 0;; ++attempt) {
+      try {
+        data.assign(size, 0);
+        return true;
+      } catch (const std::bad_alloc&) {
+        std::vector<uint8_t>().swap(data);
+        if (attempt) {
+          ReportFailure(kind, "host allocation", size);
+          return false;
+        }
+        if (&data != &staging) std::vector<uint8_t>().swap(staging);
+        Evict(last_frame, 1);
+      }
+    }
+  }
+
+  void ForgetTexture(dl::ITexture* texture) {
+    if (!texture) return;
+    for (auto it = views.begin(); it != views.end();) {
+      it = it->first.texture == texture ? views.erase(it) : std::next(it);
+    }
+  }
+
+  void Drop(uint64_t key) {
+    auto it = textures.find(key);
+    if (it == textures.end()) return;
+    ForgetTexture(it->second.texture);
+    textures.erase(it);
+  }
+
+  void DropOrphanViews() {
+    struct Use {
+      long views = 0;
+      bool only_cached = true;
+    };
+    std::unordered_map<dl::ITexture*, Use> uses;
+    for (const auto& [key, view] : views) {
+      Use& u = uses[key.texture];
+      ++u.views;
+      if (view->GetReferenceCounters()->GetNumStrongRefs() != 1) u.only_cached = false;
+    }
+    std::unordered_set<dl::ITexture*> orphans;
+    for (const auto& [texture, u] : uses) {
+      if (u.only_cached && texture->GetReferenceCounters()->GetNumStrongRefs() == u.views) {
+        orphans.insert(texture);
+      }
+    }
+    if (orphans.empty()) return;
+    for (auto it = views.begin(); it != views.end();) {
+      it = orphans.count(it->first.texture) ? views.erase(it) : std::next(it);
+    }
+    evicted_views += orphans.size();
+  }
 
   void Evict(uint64_t frame, uint64_t unused_frames) {
     std::unordered_set<dl::ITexture*> gone;
@@ -250,15 +372,18 @@ struct TextureCache::Impl {
   void BeginUse(uint64_t frame) {
     if (frame == last_frame) return;
     last_frame = frame;
-    if (frame % 60 == 0) Evict(frame, kUnusedFrames);
+    if (frame % 60 == 0) {
+      Evict(frame, kUnusedFrames);
+      DropOrphanViews();
+    }
   }
 
   // format: view format for typeless textures (UNKNOWN = the texture's own).
   dl::ITextureView* View(dl::ITexture* texture, uint32_t swizzle,
                          dl::RESOURCE_DIMENSION dimension = dl::RESOURCE_DIM_TEX_2D_ARRAY,
                          dl::TEXTURE_FORMAT format = dl::TEX_FORMAT_UNKNOWN) {
-    uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(texture)) ^ (uint64_t(swizzle) << 52) ^
-                   (uint64_t(format) << 44);
+    if (!texture) return nullptr;
+    ViewKey key{texture, swizzle, format, dimension};
     auto it = views.find(key);
     if (it != views.end()) return it->second;
     dl::TextureViewDesc desc;
@@ -330,7 +455,7 @@ struct TextureCache::Impl {
         total += size_t((lw + bw - 1) / bw) * ((lh + bh - 1) / bh) * bpb;
       }
     }
-    out.data.assign(total, 0);
+    if (!Allocate(out.data, total, "2D/cube")) return false;
     out.subresources.clear();
     size_t index = 0;
     for (uint32_t slice = 0; slice < array_size; ++slice) {
@@ -399,7 +524,10 @@ struct TextureCache::Impl {
         Evict(last_frame, 1);
         device->CreateTexture(desc, &data, &entry.texture);
       }
-      if (!entry.texture) return false;
+      if (!entry.texture) {
+        ReportFailure(name, "device allocation", levels.data.size());
+        return false;
+      }
       entry.bytes = levels.data.size();
     } else {
       size_t index = 0;
@@ -433,7 +561,27 @@ void TextureCache::SetReplacer(Replacer replacer) { impl_->replacer = std::move(
 
 dl::ITextureView* TextureCache::GetView2D(const uint32_t fetch_dwords[6], const uint8_t* base,
                                           uint64_t frame, char* source, bool is_signed) {
-  Impl& m = *impl_;
+  return impl_->Guard("2D",
+                      [&] { return impl_->View2D(fetch_dwords, base, frame, source, is_signed); });
+}
+
+dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], const uint8_t* base,
+                                            uint64_t frame, char* source, bool is_signed) {
+  return impl_->Guard("cube",
+                      [&] { return impl_->ViewCube(fetch_dwords, base, frame, source, is_signed); });
+}
+
+dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const uint8_t* base,
+                                          uint64_t frame, char* source, bool is_signed) {
+  return impl_->Guard("3D",
+                      [&] { return impl_->View3D(fetch_dwords, base, frame, source, is_signed); });
+}
+
+void TextureCache::ForgetTexture(dl::ITexture* texture) { impl_->ForgetTexture(texture); }
+
+dl::ITextureView* TextureCache::Impl::View2D(const uint32_t fetch_dwords[6], const uint8_t* base,
+                                             uint64_t frame, char* source, bool is_signed) {
+  Impl& m = *this;
   char unused;
   char& src_kind = source ? *source : unused;
   src_kind = '-';
@@ -472,8 +620,9 @@ dl::ITextureView* TextureCache::GetView2D(const uint32_t fetch_dwords[6], const 
     ++m.unsupported;
     return nullptr;
   }
-  uint32_t size = info.extent.all_blocks() * host.bytes_per_block;
-  if (!guest::IsPhysicalRange(address, size)) return nullptr;
+  uint64_t size = uint64_t(info.extent.block_pitch_h) * info.extent.block_pitch_v *
+                  info.extent.depth * host.bytes_per_block;
+  if (!FitsPhysical(address, size)) return nullptr;
 
   // The texture is identified by its address, format, size and mip setup.
   // (dword 0: pitch and tiling; 1: base and format; 2: size; 5: mip address).
@@ -502,16 +651,19 @@ dl::ITextureView* TextureCache::GetView2D(const uint32_t fetch_dwords[6], const 
   Impl::LoadedLevels levels;
   uint64_t hash = 0;
   if (!m.LoadLevels(fetch, host, base, levels, hash, true)) {
-    m.textures.erase(key);
+    m.Drop(key);
     return nullptr;
   }
   if (entry.texture && entry.content_hash == hash) return view(nullptr);
-  entry.content_hash = hash;
-  m.LoadLevels(fetch, host, base, levels, hash);
-  if (!m.StoreLevels(entry, levels, host, dl::RESOURCE_DIM_TEX_2D_ARRAY, "GuestTexture")) {
-    m.textures.erase(key);
+  if (!m.LoadLevels(fetch, host, base, levels, hash)) {
+    if (!entry.texture) m.textures.erase(key);
     return nullptr;
   }
+  if (!m.StoreLevels(entry, levels, host, dl::RESOURCE_DIM_TEX_2D_ARRAY, "GuestTexture")) {
+    m.Drop(key);
+    return nullptr;
+  }
+  entry.content_hash = hash;
   LoadedTexture loaded{levels.width, levels.height, uint32_t(info.format), levels.levels,
                        levels.subresources.empty()
                            ? nullptr
@@ -519,9 +671,9 @@ dl::ITextureView* TextureCache::GetView2D(const uint32_t fetch_dwords[6], const 
   return view(&loaded);
 }
 
-dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], const uint8_t* base,
-                                            uint64_t frame, char* source, bool is_signed) {
-  Impl& m = *impl_;
+dl::ITextureView* TextureCache::Impl::ViewCube(const uint32_t fetch_dwords[6], const uint8_t* base,
+                                               uint64_t frame, char* source, bool is_signed) {
+  Impl& m = *this;
   char unused;
   char& src_kind = source ? *source : unused;
   src_kind = '-';
@@ -543,11 +695,11 @@ dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], cons
   uint32_t width = info.width + 1, height = info.height + 1;
   const auto& extent = info.extent;
   // Faces are consecutive slices, each aligned to 4 KB.
-  uint32_t face_stride =
-      (extent.block_pitch_h * extent.block_pitch_v * host.bytes_per_block + 4095) & ~4095u;
+  uint64_t face_stride =
+      (uint64_t(extent.block_pitch_h) * extent.block_pitch_v * host.bytes_per_block + 4095) &
+      ~uint64_t(4095);
   uint32_t address = info.memory.base_address;
-  uint32_t size = face_stride * 6;
-  if (!guest::IsPhysicalRange(address, size)) return nullptr;
+  if (!FitsPhysical(address, face_stride * 6)) return nullptr;
   uint32_t swizzle = ComposeSwizzle(fetch.swizzle, info.format);
 
   // Cube and 3D keys: the whole fetch constant, xored apart from each other.
@@ -567,20 +719,22 @@ dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], cons
   Impl::LoadedLevels levels;
   uint64_t hash = 0;
   if (!m.LoadLevels(fetch, host, base, levels, hash, true)) {
-    m.textures.erase(key);
+    m.Drop(key);
     return nullptr;
   }
   if (entry.texture && entry.content_hash == hash) {
     return m.View(entry.texture, swizzle, dl::RESOURCE_DIM_TEX_CUBE, view_format);
   }
-  entry.content_hash = hash;
-  m.LoadLevels(fetch, host, base, levels, hash);
-  if (levels.array_size != 6) return nullptr;
-  bool created = !entry.texture;
-  if (!m.StoreLevels(entry, levels, host, dl::RESOURCE_DIM_TEX_CUBE, "GuestTextureCube")) {
-    m.textures.erase(key);
+  if (!m.LoadLevels(fetch, host, base, levels, hash) || levels.array_size != 6) {
+    if (!entry.texture) m.textures.erase(key);
     return nullptr;
   }
+  bool created = !entry.texture;
+  if (!m.StoreLevels(entry, levels, host, dl::RESOURCE_DIM_TEX_CUBE, "GuestTextureCube")) {
+    m.Drop(key);
+    return nullptr;
+  }
+  entry.content_hash = hash;
   if (created) {
     REXLOG_INFO("NATIVE-TEX cube texture {:08X} {}x{} fmt={} levels={}", address, width, height,
                 uint32_t(info.format), levels.levels);
@@ -588,9 +742,9 @@ dl::ITextureView* TextureCache::GetViewCube(const uint32_t fetch_dwords[6], cons
   return m.View(entry.texture, swizzle, dl::RESOURCE_DIM_TEX_CUBE, view_format);
 }
 
-dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const uint8_t* base,
-                                          uint64_t frame, char* source, bool is_signed) {
-  Impl& m = *impl_;
+dl::ITextureView* TextureCache::Impl::View3D(const uint32_t fetch_dwords[6], const uint8_t* base,
+                                             uint64_t frame, char* source, bool is_signed) {
+  Impl& m = *this;
   char unused;
   char& src_kind = source ? *source : unused;
   src_kind = '-';
@@ -614,8 +768,9 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
   const auto& extent = info.extent;
   uint32_t pitch = extent.block_pitch_h, pitch_v = extent.block_pitch_v;
   uint32_t address = info.memory.base_address;
-  uint32_t size = pitch * pitch_v * depth * host.bytes_per_block;
-  if (!guest::IsPhysicalRange(address, size)) return nullptr;
+  uint64_t guest_size = uint64_t(pitch) * pitch_v * depth * host.bytes_per_block;
+  if (!FitsPhysical(address, guest_size)) return nullptr;
+  uint32_t size = uint32_t(guest_size);
   const uint8_t* src = guest::PhysicalPtr(base, address);
   uint32_t swizzle = ComposeSwizzle(fetch.swizzle, info.format);
 
@@ -636,11 +791,12 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
   if (entry.texture && entry.content_hash == hash) {
     return m.View(entry.texture, swizzle, dl::RESOURCE_DIM_TEX_3D, view_format);
   }
-  entry.content_hash = hash;
-
   uint32_t bpb = host.bytes_per_block;
   uint32_t bpb_log2 = Log2BytesPerBlock(bpb);
-  m.staging.assign(size_t(width) * height * depth * bpb, 0);
+  if (!m.Allocate(m.staging, size_t(width) * height * depth * bpb, "3D")) {
+    if (!entry.texture) m.textures.erase(key);
+    return nullptr;
+  }
   for (uint32_t z = 0; z < depth; ++z) {
     for (uint32_t y = 0; y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
@@ -671,6 +827,11 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
     dl::TextureData data{&subresource, 1};
     m.device->CreateTexture(desc, &data, &entry.texture);
     if (!entry.texture) {
+      m.Evict(m.last_frame, 1);
+      m.device->CreateTexture(desc, &data, &entry.texture);
+    }
+    if (!entry.texture) {
+      m.ReportFailure("3D", "device allocation", m.staging.size());
       m.textures.erase(key);
       return nullptr;
     }
@@ -683,6 +844,7 @@ dl::ITextureView* TextureCache::GetView3D(const uint32_t fetch_dwords[6], const 
                              dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                              dl::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
   }
+  entry.content_hash = hash;
   ++m.uploads;
   m.uploaded_bytes += m.staging.size();
   return m.View(entry.texture, swizzle, dl::RESOURCE_DIM_TEX_3D, view_format);
@@ -752,15 +914,23 @@ dl::ISampler* TextureCache::GetSampler(const uint32_t fetch_dwords[6], uint32_t 
   return sampler;
 }
 
+TextureCache::Counts TextureCache::GetCounts() const {
+  Counts c;
+  c.textures = impl_->textures.size();
+  c.views = impl_->views.size();
+  c.samplers = impl_->samplers.size();
+  for (const auto& [key, entry] : impl_->textures) c.bytes += entry.bytes;
+  return c;
+}
+
 void TextureCache::LogStats() {
-  uint64_t bytes = 0;
-  for (const auto& [key, entry] : impl_->textures) bytes += entry.bytes;
+  Counts c = GetCounts();
   REXLOG_INFO(
       "NATIVE-TEX textures={} ({} MB) evicted={} uploads={} uploaded={} KB resolved_hits={} "
-      "unsupported={} views={} samplers={}",
-      impl_->textures.size(), bytes >> 20, impl_->evicted, impl_->uploads,
-      impl_->uploaded_bytes / 1024, impl_->resolved_hits, impl_->unsupported,
-      impl_->views.size(), impl_->samplers.size());
+      "unsupported={} views={} (orphans dropped {}) samplers={} failures={}",
+      c.textures, c.bytes >> 20, impl_->evicted, impl_->uploads, impl_->uploaded_bytes / 1024,
+      impl_->resolved_hits, impl_->unsupported, c.views, impl_->evicted_views, c.samplers,
+      impl_->failures);
 }
 
 }  // namespace renderer

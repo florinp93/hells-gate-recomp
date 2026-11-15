@@ -64,6 +64,14 @@ class TextureCache {
   Diligent::ISampler* GetSampler(const uint32_t fetch[6], uint32_t mag_filter, uint32_t min_filter,
                                  uint32_t mip_filter, uint32_t aniso_filter);
 
+  void ForgetTexture(Diligent::ITexture* texture);
+
+  struct Counts {
+    size_t textures = 0, views = 0, samplers = 0;
+    uint64_t bytes = 0;
+  };
+  Counts GetCounts() const;
+
   void LogStats();
 
  private:

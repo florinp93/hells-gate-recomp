@@ -343,6 +343,29 @@ struct Precompile {
 };
 Precompile g_precompile;
 std::unique_ptr<TextureCache> g_texture_cache;
+
+// Views of front buffer textures with the front buffer's swizzle.
+struct FrontViewKey {
+  dl::ITexture* texture;
+  uint32_t swizzle;
+  bool operator==(const FrontViewKey&) const = default;
+};
+struct FrontViewKeyHash {
+  size_t operator()(const FrontViewKey& k) const {
+    return std::hash<const void*>()(k.texture) ^ (size_t(k.swizzle) * 0x9E3779B97F4A7C15ull);
+  }
+};
+std::unordered_map<FrontViewKey, dl::RefCntAutoPtr<dl::ITextureView>, FrontViewKeyHash>
+    g_front_views;
+
+void ForgetTextureViews(dl::ITexture* texture) {
+  if (!texture) return;
+  if (g_texture_cache) g_texture_cache->ForgetTexture(texture);
+  for (auto it = g_front_views.begin(); it != g_front_views.end();) {
+    it = it->first.texture == texture ? g_front_views.erase(it) : std::next(it);
+  }
+}
+
 std::unique_ptr<DrawRenderer> g_draw_renderer;
 std::unique_ptr<SmaaPass> g_smaa;
 std::unique_ptr<OverlayRenderer> g_overlay;
@@ -486,6 +509,7 @@ RenderTarget* GetRenderTarget(const SurfaceDesc& s) {
   desc.BindFlags =
       (s.depth ? dl::BIND_DEPTH_STENCIL : dl::BIND_RENDER_TARGET) | dl::BIND_SHADER_RESOURCE;
   desc.Usage = dl::USAGE_DEFAULT;
+  rt.stencil_view.Release();
   rt.texture.Release();
   g_device->RenderDevice()->CreateTexture(desc, nullptr, &rt.texture);
   if (!rt.texture) {
@@ -522,8 +546,13 @@ ResolveTarget* GetResolveTarget(uint32_t address, uint32_t width, uint32_t heigh
   desc.Format = ResolveTargetFormat(guest_format);
   desc.BindFlags = dl::BIND_SHADER_RESOURCE | dl::BIND_RENDER_TARGET;
   desc.Usage = dl::USAGE_DEFAULT;
+  bool recreated = t.texture != nullptr;
+  ForgetTextureViews(t.texture);
+  ForgetTextureViews(t.depth_bits);
   t.texture.Release();
   t.depth_bits.Release();
+  t.staging.Release();
+  t.readback_fence = 0;
   g_device->RenderDevice()->CreateTexture(desc, nullptr, &t.texture);
   if (!t.texture) {
     REXLOG_ERROR("DanteDevice: failed to create resolve target {:08X} {}x{} fmt={}", address, width,
@@ -538,8 +567,9 @@ ResolveTarget* GetResolveTarget(uint32_t address, uint32_t width, uint32_t heigh
   t.guest_format = guest_format;
   t.format = desc.Format;
   t.scale = scale;
-  REXLOG_INFO("NATIVE-RT new resolve target {:08X} {}x{} guest fmt={}", address, width, height,
-              guest_format);
+  REXLOG_INFO("NATIVE-RT new resolve target {:08X} {}x{} guest fmt={}{} (host {}x{}){}", address,
+              width, height, guest_format, slice ? fmt::format(" slice {}", slice - 1) : "",
+              desc.Width, desc.Height, recreated ? " recreated at a new scale" : "");
   return &t;
 }
 
@@ -940,12 +970,13 @@ DrawTargets BoundTargets(const uint8_t* base, uint32_t dev) {
   DrawTargets t;
   t.scale_x = g_scale_x;
   t.scale_y = g_scale_y;
+  RenderTargetKey color_keys[4];
   for (uint32_t i = 0; i < 4; ++i) {
     SurfaceDesc s;
     if (!ReadSurface(base, Load32(base, dev + kDevRenderTargets + i * 4), false, s)) break;
     RenderTarget* rt = GetRenderTarget(s);
     if (!rt) break;
-    t.color[i] = rt->texture->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
+    color_keys[i] = {s.base_tile, s.pitch, s.format, false};
     t.color_format[i] = rt->format;
     t.guest_color_format[i] = s.format;
     t.color_count = i + 1;
@@ -981,6 +1012,14 @@ DrawTargets BoundTargets(const uint8_t* base, uint32_t dev) {
         t.height = rt->height;
       }
     }
+  }
+  for (uint32_t i = 0; i < t.color_count; ++i) {
+    auto it = g_render_targets.find(color_keys[i]);
+    if (it == g_render_targets.end() || !it->second.texture) {
+      t.color_count = i;
+      break;
+    }
+    t.color[i] = it->second.texture->GetDefaultView(dl::TEXTURE_VIEW_RENDER_TARGET);
   }
   return t;
 }
@@ -1205,17 +1244,29 @@ void PerfOnSwap(uint32_t draws, uint32_t resolves) {
   if (!threads.empty()) REXLOG_INFO("PERF threads: {}", threads);
   std::string hot = HotSpots();
   if (!hot.empty()) REXLOG_INFO("PERF hot:{}", hot);
+  {
+    uint64_t private_bytes = 0, working_set = 0;
+    ProcessMemory(private_bytes, working_set);
+    TextureCache::Counts tex =
+        g_texture_cache ? g_texture_cache->GetCounts() : TextureCache::Counts{};
+    DrawRenderer::Counts draw =
+        g_draw_renderer ? g_draw_renderer->GetCounts() : DrawRenderer::Counts{};
+    REXLOG_INFO(
+        "PERF memory: private {} MB, working set {} MB; render targets {}, resolve targets {}, "
+        "front views {}, textures {} ({} MB), views {}, samplers {}, pipelines {}, uploaded "
+        "ranges {}, missing textures {}",
+        private_bytes >> 20, working_set >> 20, g_render_targets.size(), g_resolve_targets.size(),
+        g_front_views.size(), tex.textures, tex.bytes >> 20, tex.views, tex.samplers,
+        draw.pipelines, draw.uploaded_ranges, draw.missing_textures);
+  }
   p.start = now;
   p.frame_ms.clear();
   p.slow_frames = 0;
   p.at_start = stats;
 }
 
-// Views of front buffer textures with the front buffer's swizzle.
-std::unordered_map<uint64_t, dl::RefCntAutoPtr<dl::ITextureView>> g_front_views;
-
 dl::ITextureView* FrontBufferView(dl::ITexture* texture, uint32_t swizzle) {
-  uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(texture)) ^ (uint64_t(swizzle) << 52);
+  FrontViewKey key{texture, swizzle};
   auto it = g_front_views.find(key);
   if (it != g_front_views.end()) return it->second;
   dl::TextureViewDesc desc;
@@ -1224,8 +1275,8 @@ dl::ITextureView* FrontBufferView(dl::ITexture* texture, uint32_t swizzle) {
   desc.Swizzle = ComponentMapping(swizzle);
   dl::RefCntAutoPtr<dl::ITextureView> view;
   texture->CreateView(desc, &view);
-  g_front_views.emplace(key, view);
-  return view ? view.RawPtr() : texture->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE);
+  if (!view) return texture->GetDefaultView(dl::TEXTURE_VIEW_SHADER_RESOURCE);
+  return g_front_views.emplace(key, std::move(view)).first->second;
 }
 
 void SavePsoCache() {

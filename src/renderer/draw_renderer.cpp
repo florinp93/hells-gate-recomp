@@ -37,6 +37,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <set>
 #include <string>
@@ -249,7 +250,7 @@ struct DrawRenderer::Impl {
   PipelineStorage* storage = nullptr;
   dl::IPipelineStateCache* pso_cache = nullptr;
 
-  uint32_t draws = 0, skipped_other = 0, pipeline_failures = 0;
+  uint32_t draws = 0, skipped_other = 0, pipeline_failures = 0, draw_failures = 0;
   uint32_t skipped_targets = 0, skipped_viewport = 0, skipped_scissor = 0, skipped_pipeline = 0;
   uint64_t uploaded_bytes = 0;
 
@@ -577,6 +578,23 @@ void DrawRenderer::Precompile(const std::vector<StoredDraw>& draws, const Shader
 bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& shaders,
                         const DrawTargets& targets, const uint8_t* base, bool log,
                         uint32_t volatile_fetch) {
+  try {
+    return DrawUnchecked(regs, shaders, targets, base, log, volatile_fetch);
+  } catch (const std::exception& e) {
+    if (++impl_->draw_failures <= 16) {
+      REXLOG_WARN("NATIVE-DRAW draw failed: {} (failure {})", e.what(), impl_->draw_failures);
+    }
+  } catch (...) {
+    if (++impl_->draw_failures <= 16) {
+      REXLOG_WARN("NATIVE-DRAW draw failed: unknown exception (failure {})", impl_->draw_failures);
+    }
+  }
+  return false;
+}
+
+bool DrawRenderer::DrawUnchecked(const rg::RegisterFile& regs, const TranslatedShaders& shaders,
+                                 const DrawTargets& targets, const uint8_t* base, bool log,
+                                 uint32_t volatile_fetch) {
   Impl& m = *impl_;
   if (!m.shared_memory || !shaders.vertex || !shaders.vertex_info) return false;
   if (!targets.width || !targets.height) {
@@ -663,6 +681,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
     uint32_t v = index_endian == xenos::Endian::k8in16 ? uint16_t((raw << 8) | (raw >> 8)) : raw;
     return reset_enabled && v == (reset & 0xFFFF) ? 0xFFFFu : v;
   };
+  if ((points || fan || quads) &&
+      uint64_t(count) * (points ? 20 : fan ? 12 : 6) > kIndexRingSize) {
+    return false;
+  }
   std::vector<uint32_t> indices;
   uint32_t index_count = 0;
   uint32_t point_index_load_address = 0;
@@ -983,9 +1005,8 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
     // fetch constant's dimension, so the other one is unused.
     bool unused_binding =
         (t.dimension == '3') != (fetch_constant.dimension == xenos::DataDimension::k3D);
-    if (!view && !unused_binding &&
-        m.missing_textures.insert((uint64_t(fetch[1]) << 32) | fetch[2]).second &&
-        m.missing_textures.size() <= 64) {
+    if (!view && !unused_binding && m.missing_textures.size() < 64 &&
+        m.missing_textures.insert((uint64_t(fetch[1]) << 32) | fetch[2]).second) {
       REXLOG_INFO(
           "NATIVE-TEX no texture for fetch {} ({}): {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
           t.fetch_constant, t.dimension, fetch[0], fetch[1], fetch[2], fetch[3], fetch[4],
@@ -1100,6 +1121,10 @@ bool DrawRenderer::Draw(const rg::RegisterFile& regs, const TranslatedShaders& s
         shaders.pixel_info ? shaders.pixel_info->ucode_data_hash() : 0, vertex_log, texture_log);
   }
   return true;
+}
+
+DrawRenderer::Counts DrawRenderer::GetCounts() const {
+  return {impl_->pipelines.size(), impl_->uploaded.size(), impl_->missing_textures.size()};
 }
 
 void DrawRenderer::LogStats() {
