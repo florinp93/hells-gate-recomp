@@ -80,7 +80,7 @@ REXCVAR_DEFINE_INT32(dante_resolution_scale, 1, "Graphics",
 
 REXCVAR_DEFINE_STRING(dante_resolution, "", "Graphics",
                       "renderer=dante: render resolution, 'WxH' (e.g. 1920x1080, 3440x1440) or "
-                      "'auto' (window size). Wider than 16:9 sets the game's display aspect. "
+                      "'auto' (window size). Non-16:9 aspects above 4:3 set the game's display aspect. "
                       "Overrides dante_resolution_scale; read at startup");
 
 REXCVAR_DEFINE_INT32(dante_shadow_scale, 2, "Graphics",

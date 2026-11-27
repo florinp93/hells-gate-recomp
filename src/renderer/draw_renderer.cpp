@@ -46,7 +46,7 @@
 #include <vector>
 
 REXCVAR_DEFINE_BOOL(dante_ui_16_9, true, "Graphics",
-                    "renderer=dante: draw menus and the HUD in a centred 16:9 area on wider "
+                    "renderer=dante: draw menus and the HUD in a centred 16:9 area on non-16:9 "
                     "screens instead of stretching them");
 
 namespace renderer {
@@ -1052,7 +1052,11 @@ bool DrawRenderer::DrawUnchecked(const rg::RegisterFile& regs, const TranslatedS
           kUiVertexShaders.end();
   const bool ui_squeeze_x = scale_x > scale_y && ui_shader;
   const bool ui_squeeze_y =
-      scale_x < scale_y && ui_shader && rex::cvar::Query<double>("ultrawide_target_aspect") > 0.0;
+      scale_x < scale_y && ui_shader &&
+      ([] {
+        static const bool custom = rex::cvar::Query<double>("ultrawide_target_aspect") > 0.0;
+        return custom;
+      })();
   const float ui_center_x = 0.5f * float(host_x(targets.width));
   const float ui_factor_x = scale_y / scale_x;
   const float ui_center_y = 0.5f * float(host_y(targets.height));
