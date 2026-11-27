@@ -41,6 +41,7 @@ namespace DantesInferno
         {
             new AspectOption { Label = "Auto (match resolution)", Key = AspectAuto, Value = 0 },
             new AspectOption { Label = "4:3", Key = "4:3", Value = 4.0 / 3.0 },
+            new AspectOption { Label = "16:10", Key = "16:10", Value = 1.6 },
             new AspectOption { Label = "16:9", Key = "16:9", Value = 16.0 / 9.0 },
             new AspectOption { Label = "21:9", Key = "21:9", Value = 64.0 / 27.0 },
             new AspectOption { Label = "32:9", Key = "32:9", Value = 32.0 / 9.0 },

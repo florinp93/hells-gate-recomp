@@ -251,9 +251,9 @@ struct RenderScale {
 // the picture fills the largest box of that aspect within the resolution.
 // 4:3 (or narrower) uses the game's own standard-definition mode, chosen from
 // a 640x480 video mode: UI laid out for 4:3, 3D still rendered into the 16:9
-// 1280x720 targets and squeezed to 4:3 like the console's scaler. Wider than
-// 16:9 sets the game's display aspect. Both are rendered anamorphically.
-// Aspects between 4:3 and 16:9 stay 16:9, letterboxed.
+// 1280x720 targets and squeezed to 4:3 like the console's scaler. Any other
+// non-16:9 aspect (such as 16:10, 21:9, 32:9) sets the game's display aspect
+// and renders anamorphically to fill the full box without letterboxing.
 RenderScale ComputeRenderScale(rex::ui::Window* window) {
   std::string mode = REXCVAR_GET(dante_resolution);
   uint32_t width = 0, height = 0;
@@ -283,7 +283,7 @@ RenderScale ComputeRenderScale(rex::ui::Window* window) {
     scale.y = std::max(1.0f, box_height(4.0 / 3.0) / 720.0f);
     scale.x = std::max(1.0f, scale.y * 0.75f);
     scale.display_aspect = 4.0 / 3.0;
-  } else if (aspect > 16.0 / 9.0 + 0.01) {
+  } else if (std::abs(aspect - 16.0 / 9.0) > 0.01) {
     rex::cvar::SetFlagByName("ultrawide_target_aspect", fmt::format("{:.4f}", aspect));
     scale.y = std::max(1.0f, box_height(aspect) / 720.0f);
     scale.x = std::max(1.0f, float(720.0 * scale.y * aspect) / 1280.0f);

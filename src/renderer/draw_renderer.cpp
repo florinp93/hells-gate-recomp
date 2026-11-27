@@ -1046,15 +1046,23 @@ bool DrawRenderer::DrawUnchecked(const rg::RegisterFile& regs, const TranslatedS
   static constexpr std::array<uint64_t, 3> kUiVertexShaders = {
       0xC40DC095B70946ACull, 0x2ED7EB623067A9D5ull, 0x3BF4A4C9E3389AA3ull};
   const uint64_t vertex_ucode_hash = shaders.vertex_info->ucode_data_hash();
-  const bool ui_squeeze =
-      scale_x > scale_y && REXCVAR_GET(dante_ui_16_9) &&
+  const bool ui_shader =
+      REXCVAR_GET(dante_ui_16_9) &&
       std::find(kUiVertexShaders.begin(), kUiVertexShaders.end(), vertex_ucode_hash) !=
           kUiVertexShaders.end();
-  const float ui_center = 0.5f * float(host_x(targets.width));
-  const float ui_factor = scale_y / scale_x;
-  if (ui_squeeze) {
-    vp.TopLeftX = ui_center + (vp.TopLeftX - ui_center) * ui_factor;
-    vp.Width *= ui_factor;
+  const bool ui_squeeze_x = scale_x > scale_y && ui_shader;
+  const bool ui_squeeze_y =
+      scale_x < scale_y && ui_shader && rex::cvar::Query<double>("ultrawide_target_aspect") > 0.0;
+  const float ui_center_x = 0.5f * float(host_x(targets.width));
+  const float ui_factor_x = scale_y / scale_x;
+  const float ui_center_y = 0.5f * float(host_y(targets.height));
+  const float ui_factor_y = scale_x / scale_y;
+  if (ui_squeeze_x) {
+    vp.TopLeftX = ui_center_x + (vp.TopLeftX - ui_center_x) * ui_factor_x;
+    vp.Width *= ui_factor_x;
+  } else if (ui_squeeze_y) {
+    vp.TopLeftY = ui_center_y + (vp.TopLeftY - ui_center_y) * ui_factor_y;
+    vp.Height *= ui_factor_y;
   } else if (video_planes >= 3 && video_luma && scale_x != scale_y) {
     // Squeeze around the render target's centre back to the 16:9 shape:
     // pillarbox on wider aspects, letterbox on narrower ones.
@@ -1077,9 +1085,12 @@ bool DrawRenderer::DrawUnchecked(const rg::RegisterFile& regs, const TranslatedS
   dl::Rect rect{int32_t(host_x(scissor.offset[0])), int32_t(host_y(scissor.offset[1])),
                 int32_t(std::min(host_x(scissor.offset[0] + scissor.extent[0]), host_width)),
                 int32_t(std::min(host_y(scissor.offset[1] + scissor.extent[1]), host_height))};
-  if (ui_squeeze) {
-    rect.left = int32_t(std::floor(ui_center + (float(rect.left) - ui_center) * ui_factor));
-    rect.right = int32_t(std::ceil(ui_center + (float(rect.right) - ui_center) * ui_factor));
+  if (ui_squeeze_x) {
+    rect.left = int32_t(std::floor(ui_center_x + (float(rect.left) - ui_center_x) * ui_factor_x));
+    rect.right = int32_t(std::ceil(ui_center_x + (float(rect.right) - ui_center_x) * ui_factor_x));
+  } else if (ui_squeeze_y) {
+    rect.top = int32_t(std::floor(ui_center_y + (float(rect.top) - ui_center_y) * ui_factor_y));
+    rect.bottom = int32_t(std::ceil(ui_center_y + (float(rect.bottom) - ui_center_y) * ui_factor_y));
   }
   if (rect.right <= rect.left || rect.bottom <= rect.top) {
     ++m.skipped_scissor;
